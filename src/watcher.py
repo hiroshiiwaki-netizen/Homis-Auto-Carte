@@ -126,8 +126,6 @@ class FolderWatcher:
             for file in self.watch_folder.glob("*.json"):
                 if not file.name.startswith("."):
                     self.processed_files.add(file.name)
-            if self.processed_files:
-                logger.info(f"起動時の既存ファイル: {len(self.processed_files)}件（スキップ）")
         
     def _get_processed_folder(self) -> Path:
         """処理済みフォルダを取得（なければ作成）"""
@@ -184,24 +182,30 @@ class FolderWatcher:
             # Homis書き込み
             result = self._write_to_homis(data)
             
+            # orderIdはdata.data内にある
+            karte_data = data.get("data", {})
+            order_id = karte_data.get("orderId", "")
+            
             if result["success"]:
                 logger.info(f"✅ 処理成功: {file_path.name}")
                 
                 # カルテURL
                 karte_url = result.get("karte_url", "")
-                # orderIdはdata.data内にある
-                karte_data = data.get("data", {})
-                order_id = karte_data.get("orderId", "")
                 
-                # GAS連携（テストモードでも実行）
-                if karte_url and order_id:
-                    self._notify_gas(order_id, karte_url)
+                # GAS連携（成功時）
+                if order_id:
+                    self._notify_gas(order_id, karte_url or "")
                 
                 # 処理済みフォルダに移動
                 self._move_to_processed(file_path, success=True)
                 return True
             else:
                 logger.error(f"❌ 処理失敗: {file_path.name}")
+                
+                # 失敗時もGAS連携（空のURLで通知）
+                if order_id:
+                    self._notify_gas(order_id, "")
+                
                 self._move_to_processed(file_path, success=False)
                 return False
                 

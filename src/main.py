@@ -178,29 +178,47 @@ def write_to_homis(data, config):
         
         if result["success"]:
             logger.info(f"✅ Homis書き込み成功: {data['data']['patientName']}")
-            if result["karte_url"]:
-                logger.info(f"📋 カルテURL: {result['karte_url']}")
-                
-                # GAS API連携: カルテURLをレントゲンナビに通知
-                gas_url = config.get("gas_web_app_url", "")
-                order_id = data.get("orderId", "")
-                
-                if gas_url and order_id:
-                    try:
-                        from gas_api import notify_karte_url
-                        gas_result = notify_karte_url(order_id, result["karte_url"], gas_url)
-                        if gas_result.get("success"):
-                            logger.info(f"🔗 GAS連携成功: {gas_result.get('message')}")
-                        else:
-                            logger.warning(f"⚠️ GAS連携: {gas_result.get('message')}")
-                    except Exception as gas_error:
-                        logger.warning(f"⚠️ GAS連携エラー（カルテ作成は成功）: {gas_error}")
-                elif not gas_url:
-                    logger.info("ℹ️ gas_web_app_url未設定のためGAS連携をスキップ")
-                elif not order_id:
-                    logger.info("ℹ️ orderIdがないためGAS連携をスキップ")
+            
+            # GAS API連携: カルテURLをレントゲンナビに通知
+            gas_url = config.get("gas_web_app_url", "")
+            order_id = data.get("orderId", "")
+            
+            if gas_url and order_id:
+                try:
+                    from gas_api import notify_karte_url
+                    karte_url = result.get("karte_url", "")
+                    gas_result = notify_karte_url(order_id, karte_url, gas_url)
+                    
+                    if gas_result.get("success"):
+                        logger.info(f"🔗 GAS連携成功: {gas_result.get('message')}")
+                        if karte_url:
+                            logger.info(f"📋 カルテURL: {karte_url}")
+                    else:
+                        logger.warning(f"⚠️ GAS連携: {gas_result.get('message')}")
+                except Exception as gas_error:
+                    logger.warning(f"⚠️ GAS連携エラー（カルテ作成は成功）: {gas_error}")
+            elif not gas_url:
+                logger.info("ℹ️ gas_web_app_url未設定のためGAS連携をスキップ")
+            elif not order_id:
+                logger.info("ℹ️ orderIdがないためGAS連携をスキップ")
         else:
             logger.error(f"❌ Homis書き込み失敗: {data['data']['patientName']}")
+            
+            # 失敗時でもGAS API連携: 空のURLで通知（撮影完了通知を送信するため）
+            gas_url = config.get("gas_web_app_url", "")
+            order_id = data.get("orderId", "")
+            
+            if gas_url and order_id:
+                try:
+                    from gas_api import notify_karte_url
+                    gas_result = notify_karte_url(order_id, "", gas_url)  # 空文字でHOMIS登録失敗を通知
+                    
+                    if gas_result.get("success"):
+                        logger.info(f"🔗 GAS連携成功（HOMIS登録失敗を通知）: {gas_result.get('message')}")
+                    else:
+                        logger.warning(f"⚠️ GAS連携: {gas_result.get('message')}")
+                except Exception as gas_error:
+                    logger.warning(f"⚠️ GAS連携エラー: {gas_error}")
         
         return result
         
