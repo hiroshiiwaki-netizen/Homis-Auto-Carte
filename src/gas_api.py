@@ -79,6 +79,62 @@ def notify_karte_url(order_id: str, homis_url: str, gas_url: str = None) -> dict
         return {"success": False, "message": str(e)}
 
 
+def send_group_complete_notification(group_id: str, gas_url: str = None) -> dict:
+    """
+    集団検診の一括通知を送信（v7.7.6追加）
+    
+    全員分のHOMIS連携が完了した後に呼び出す
+    
+    Args:
+        group_id: グループID (例: G-202602041000-001)
+        gas_url: GASのWebアプリURL（省略時は設定ファイルから取得）
+    
+    Returns:
+        dict: {"success": bool, "message": str}
+    """
+    try:
+        url = gas_url or GAS_WEB_APP_URL
+        
+        if not url:
+            logger.warning("GAS_WEB_APP_URLが設定されていません")
+            return {"success": False, "message": "GAS_WEB_APP_URLが未設定"}
+        
+        payload = {
+            "action": "sendGroupCompleteNotification",
+            "groupId": group_id
+        }
+        
+        logger.info(f"集団検診一括通知呼び出し: {group_id}")
+        
+        response = requests.post(
+            url,
+            json=payload,
+            headers={"Content-Type": "application/json"},
+            timeout=30
+        )
+        
+        if response.status_code == 200:
+            result = response.json()
+            if result.get("success"):
+                logger.info(f"✅ 集団検診通知成功: {result.get('message')}")
+            else:
+                logger.warning(f"⚠️ 集団検診通知警告: {result.get('message')}")
+            return result
+        else:
+            logger.error(f"❌ GAS API HTTPエラー: {response.status_code}")
+            return {"success": False, "message": f"HTTP {response.status_code}"}
+            
+    except requests.exceptions.Timeout:
+        logger.error("GAS API タイムアウト")
+        return {"success": False, "message": "タイムアウト"}
+    except requests.exceptions.RequestException as e:
+        logger.error(f"GAS API リクエストエラー: {e}")
+        return {"success": False, "message": str(e)}
+    except Exception as e:
+        logger.error(f"GAS API 予期せぬエラー: {e}")
+        return {"success": False, "message": str(e)}
+
+
 # === テスト用コード ===
 if __name__ == "__main__":
     import json

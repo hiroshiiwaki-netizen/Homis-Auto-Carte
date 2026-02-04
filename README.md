@@ -1,4 +1,10 @@
-# Homis自動カルテ生成 v1.0
+# Homis自動カルテ生成 (Homis-Auto-Chart)
+
+> [!IMPORTANT]
+> **GitHubリポジトリ**: [Link](https://github.com/hiroshiiwaki-netizen/Homis-Auto-Chart)  
+> **開発標準**: [DEVELOPMENT_STANDARDS.md](../docs/DEVELOPMENT_STANDARDS.md) 準拠  
+> **バージョン管理**: セマンティックバージョニング (`MAJOR.MINOR.PATCH`)
+ v1.0
 
 レントゲンナビと連携し、撮影完了時にHomisカルテを自動登録するツール。
 

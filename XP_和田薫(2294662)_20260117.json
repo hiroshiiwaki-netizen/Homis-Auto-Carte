@@ -1,0 +1,31 @@
+{
+    "action": "homis_karte_write",
+    "template": "xray_karte",
+    "created_at": "2026-02-04T10:40:00+09:00",
+    "data": {
+        "orderId": "R-202601161641-250",
+        "homisId": "2294662",
+        "patientName": "和田 薫",
+        "shootingDate": "2026-01-17",
+        "shootingDateDisplay": "2026/01/17(金)",
+        "shootingTime": "13:52",
+        "shootingTimeEnd": "14:02",
+        "requestDate": "2026_01_16",
+        "doctorName": "仲西 凜太郎",
+        "orcaNumber": "",
+        "sContent": "胸部レントゲン\nCOPD評価",
+        "apContent": "指示医：仲西 凜太郎\n和田 薫様XP 2026_01_17 XP依頼日: 2026_01_16\n目的：COPD評価\n部位：胸部正面（座位）\n撮影枚数：1枚\nhttps://app.lookrec.com/simple/thumbnail?institutionCode=56e5fdf2-6a4c-0953-c961-b031f18a8d06&studyUId=1.2.392.200036.9125.2.210711512506215.65121393248.81528&currentInstitutionCode=56e5fdf2-6a4c-0953-c961-b031f18a8d06\n\n合計：1枚",
+        "orders": [
+            {
+                "siteName": "胸部",
+                "direction": "正面",
+                "position": "座位",
+                "purpose": "COPD評価",
+                "shotCount": 1,
+                "siteString": "胸部正面（座位）"
+            }
+        ],
+        "totalCount": 1,
+        "lookrecLink": "https://app.lookrec.com/simple/thumbnail?institutionCode=56e5fdf2-6a4c-0953-c961-b031f18a8d06&studyUId=1.2.392.200036.9125.2.210711512506215.65121393248.81528&currentInstitutionCode=56e5fdf2-6a4c-0953-c961-b031f18a8d06"
+    }
+}

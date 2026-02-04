@@ -115,6 +115,10 @@ class FolderWatcher:
         self.processed_files: set = set()  # 処理済みファイルのセット
         self.running = False
         
+        # v7.7.6: 集団検診グループ追跡用
+        # {groupId: {"count": 処理済数, "expected": 予想数（不明なら-1）, "last_update": 最終更新時刻}}
+        self.group_pending: dict = {}
+        
         # 起動時点でフォルダにあるファイルを記録（これらは処理しない）
         self._record_existing_files()
     
@@ -179,6 +183,10 @@ class FolderWatcher:
                 self._move_to_processed(file_path, success=False)
                 return False
             
+            # v7.7.6: 集団検診かどうかをチェック
+            is_group = data.get("isGroup", False)
+            group_id = data.get("groupId", "")
+            
             # Homis書き込み
             result = self._write_to_homis(data)
             
@@ -192,9 +200,16 @@ class FolderWatcher:
                 # カルテURL
                 karte_url = result.get("karte_url", "")
                 
-                # GAS連携（成功時）
+                # GAS連携
                 if order_id:
-                    self._notify_gas(order_id, karte_url or "")
+                    if is_group and group_id:
+                        # 集団検診の場合：個別通知はスキップ、グループ追跡のみ
+                        self._notify_gas(order_id, karte_url or "")
+                        self._track_group(group_id)
+                        logger.info(f"📊 集団検診グループ追跡: {group_id}")
+                    else:
+                        # 通常オーダーの場合：通常通り通知
+                        self._notify_gas(order_id, karte_url or "")
                 
                 # 処理済みフォルダに移動
                 self._move_to_processed(file_path, success=True)
@@ -205,6 +220,8 @@ class FolderWatcher:
                 # 失敗時もGAS連携（空のURLで通知）
                 if order_id:
                     self._notify_gas(order_id, "")
+                    if is_group and group_id:
+                        self._track_group(group_id)
                 
                 self._move_to_processed(file_path, success=False)
                 return False
@@ -218,6 +235,53 @@ class FolderWatcher:
             import traceback
             traceback.print_exc()
             return False
+    
+    def _track_group(self, group_id: str):
+        """v7.7.6: 集団検診グループを追跡"""
+        if group_id not in self.group_pending:
+            self.group_pending[group_id] = {"count": 0, "last_update": time.time()}
+        
+        self.group_pending[group_id]["count"] += 1
+        self.group_pending[group_id]["last_update"] = time.time()
+        logger.info(f"📊 グループ {group_id}: {self.group_pending[group_id]['count']}件処理済み")
+    
+    def check_groups(self):
+        """
+        v7.7.6: 集団検診グループの完了チェック
+        一定時間（30秒）新しいファイルが来なければ完了とみなして一括通知
+        """
+        if not self.group_pending:
+            return
+        
+        current_time = time.time()
+        complete_groups = []
+        
+        for group_id, info in self.group_pending.items():
+            # 30秒間新しいファイルが来なければ完了
+            if current_time - info["last_update"] > 30:
+                complete_groups.append(group_id)
+        
+        for group_id in complete_groups:
+            info = self.group_pending.pop(group_id)
+            logger.info(f"📣 集団検診一括通知送信: {group_id} ({info['count']}名)")
+            self._send_group_notification(group_id)
+    
+    def _send_group_notification(self, group_id: str):
+        """v7.7.6: 集団検診一括通知をGASに送信"""
+        gas_url = self.config.get("gas_web_app_url", "")
+        if not gas_url:
+            logger.info("ℹ️ gas_web_app_url未設定のため一括通知をスキップ")
+            return
+        
+        try:
+            from gas_api import send_group_complete_notification
+            result = send_group_complete_notification(group_id, gas_url)
+            if result.get("success"):
+                logger.info(f"🔗 集団検診一括通知成功: {result.get('message')}")
+            else:
+                logger.warning(f"⚠️ 集団検診一括通知: {result.get('message')}")
+        except Exception as e:
+            logger.warning(f"⚠️ 集団検診一括通知エラー: {e}")
     
     def _write_to_homis(self, data: dict) -> dict:
         """Homisにカルテを書き込み（テンプレートエンジン対応）"""
@@ -328,6 +392,9 @@ class FolderWatcher:
                     logger.info(f"📬 新規ファイル検出: {len(files)}件")
                     for file in files:
                         self.process_file(file)
+                
+                # v7.7.6: 集団検診グループの完了チェック
+                self.check_groups()
                 
                 # 待機
                 time.sleep(self.poll_interval)

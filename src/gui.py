@@ -349,7 +349,8 @@ class HomisCardGeneratorGUI:
         watch_folder = self.config.get("watch_folder", "未設定")
         if len(watch_folder) > 40:
             watch_folder = "..." + watch_folder[-37:]
-        ttk.Label(config_frame, text=f"監視: {watch_folder}", font=("メイリオ", 7)).pack(anchor=tk.W)
+        self.watch_folder_label = ttk.Label(config_frame, text=f"監視: {watch_folder}", font=("メイリオ", 7))
+        self.watch_folder_label.pack(anchor=tk.W)
         
         # ============================================================
         # コントロールエリア
@@ -453,6 +454,12 @@ class HomisCardGeneratorGUI:
             foreground=mode_color
         )
         
+        # 監視フォルダ表示を更新
+        watch_folder = self.config.get("watch_folder", "未設定")
+        if len(watch_folder) > 40:
+            watch_folder = "..." + watch_folder[-37:]
+        self.watch_folder_label.config(text=f"監視: {watch_folder}")
+        
         self._add_log("設定を更新しました", "SUCCESS")
     
     def _add_log(self, message: str, level: str = "INFO"):
@@ -549,6 +556,9 @@ class HomisCardGeneratorGUI:
                             self._add_log(f"処理成功: {file.name}", "SUCCESS")
                         else:
                             self._add_log(f"処理失敗: {file.name}", "ERROR")
+                
+                # v7.7.6: 集団検診グループの完了チェック
+                self.watcher.check_groups()
                 
                 # 待機
                 time.sleep(self.watcher.poll_interval)

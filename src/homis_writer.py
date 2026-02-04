@@ -18,8 +18,8 @@ JSONファイルの内容をHomisのカルテに登録する
 # ============================================================
 # バージョン情報
 # ============================================================
-MODULE_VERSION = "1.1.0"
-MODULE_VERSION_DATE = "2026-01-30"
+MODULE_VERSION = "1.0"
+MODULE_VERSION_DATE = "2026-01-26"
 
 import os
 import time
@@ -279,62 +279,31 @@ class HomisKarteWriter:
                 logger.error(f"「医科カルテ」ボタンが見つかりません: {e}")
                 return result
             
-            # Step 5.5: 日付・時刻を入力（v1.1.0追加）
+            # Step 5.5: 時間を入力（日付はスキップ）
             # ※医科カルテボタンを押した後の画面で入力
-            # ============================================================
-            # 【フィールド情報】2026/1/30検証済み
-            # - 診察日: id="act_date" (type="date", YYYY-MM-DD形式)
-            # - 開始時刻: id="start_time" (type="text", HH:MM形式)
-            # - 終了時刻: id="end_time" (type="text", HH:MM形式)
-            # ============================================================
             
-            # 診察日入力（shootingDateがあれば）
-            shooting_date = karte_data.get('shootingDate', '')
-            if shooting_date:
-                try:
-                    self.driver.execute_script("""
-                        const actDate = document.getElementById('act_date');
-                        if (actDate) {
-                            actDate.value = arguments[0];
-                            actDate.dispatchEvent(new Event('input', { bubbles: true }));
-                            actDate.dispatchEvent(new Event('change', { bubbles: true }));
-                        }
-                    """, shooting_date)
-                    logger.info(f"診察日を入力: {shooting_date}")
-                except Exception as e:
-                    logger.warning(f"診察日入力エラー: {e}")
-            
-            # 開始時刻入力（shootingTimeがあれば）
+            # 開始時間入力（任意）
             shooting_time = karte_data.get('shootingTime', '')
             if shooting_time:
                 try:
-                    # 終了時刻を計算（開始 + 10分）
+                    time_input = self._wait_and_find(By.ID, "start_time")
+                    time_input.clear()
+                    time_input.send_keys(shooting_time)  # HH:MM形式
+                    logger.info(f"開始時間を入力: {shooting_time}")
+                    
+                    # 終了時間を計算（開始時間 + 10分）
                     from datetime import datetime, timedelta
                     start_dt = datetime.strptime(shooting_time, "%H:%M")
                     end_dt = start_dt + timedelta(minutes=10)
                     end_time = end_dt.strftime("%H:%M")
                     
-                    # JavaScriptで時刻入力（イベント発火付き）
-                    self.driver.execute_script("""
-                        const startTime = document.getElementById('start_time');
-                        const endTime = document.getElementById('end_time');
-                        
-                        if (startTime) {
-                            startTime.value = arguments[0];
-                            startTime.dispatchEvent(new Event('input', { bubbles: true }));
-                            startTime.dispatchEvent(new Event('change', { bubbles: true }));
-                        }
-                        
-                        if (endTime) {
-                            endTime.value = arguments[1];
-                            endTime.dispatchEvent(new Event('input', { bubbles: true }));
-                            endTime.dispatchEvent(new Event('change', { bubbles: true }));
-                        }
-                    """, shooting_time, end_time)
-                    logger.info(f"開始時刻を入力: {shooting_time}")
-                    logger.info(f"終了時刻を入力: {end_time}")
+                    # 終了時間を入力（id="end_time"）
+                    end_input = self._wait_and_find(By.ID, "end_time")
+                    end_input.clear()
+                    end_input.send_keys(end_time)
+                    logger.info(f"終了時間を入力: {end_time}")
                 except Exception as e:
-                    logger.warning(f"時刻入力エラー: {e}")
+                    logger.warning(f"時間入力エラー: {e}")
             
             self._safe_sleep(self.WAIT_MEDIUM)  # 画面が安定するのを待つ
             
