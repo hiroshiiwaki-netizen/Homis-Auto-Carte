@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="256" height="256" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg">
+  <!-- 背景（丸角の四角形） -->
+  <rect x="8" y="8" width="240" height="240" rx="48" ry="48" fill="#FF5100"/>
+  
+  <!-- カルテ/クリップボード -->
+  <rect x="60" y="50" width="136" height="160" rx="8" ry="8" fill="white"/>
+  
+  <!-- クリップ部分 -->
+  <rect x="100" y="40" width="56" height="24" rx="4" ry="4" fill="#FFE4D6"/>
+  <rect x="112" y="36" width="32" height="16" rx="4" ry="4" fill="#FF5100"/>
+  
+  <!-- 心電図ライン -->
+  <polyline 
+    points="75,130 95,130 105,100 115,160 125,130 145,130 155,90 165,170 175,130 190,130" 
+    fill="none" 
+    stroke="#FF5100" 
+    stroke-width="6" 
+    stroke-linecap="round" 
+    stroke-linejoin="round"/>
+  
+  <!-- 自動化を示すギア -->
+  <circle cx="195" cy="175" r="32" fill="#FF7733"/>
+  <circle cx="195" cy="175" r="20" fill="white"/>
+  <circle cx="195" cy="175" r="10" fill="#FF5100"/>
+  
+  <!-- ギアの歯（8つ） -->
+  <g fill="#FF7733">
+    <rect x="192" y="140" width="6" height="14" rx="2"/>
+    <rect x="192" y="196" width="6" height="14" rx="2"/>
+    <rect x="160" y="172" width="14" height="6" rx="2"/>
+    <rect x="216" y="172" width="14" height="6" rx="2"/>
+    <rect x="168" y="150" width="12" height="6" rx="2" transform="rotate(45 174 153)"/>
+    <rect x="210" y="192" width="12" height="6" rx="2" transform="rotate(45 216 195)"/>
+    <rect x="210" y="150" width="12" height="6" rx="2" transform="rotate(-45 216 153)"/>
+    <rect x="168" y="192" width="12" height="6" rx="2" transform="rotate(-45 174 195)"/>
+  </g>
+</svg>

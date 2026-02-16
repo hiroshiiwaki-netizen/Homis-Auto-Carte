@@ -1,0 +1,26 @@
+# Homis自動カルテ生成 - 依存パッケージ
+
+# Google API
+google-api-python-client>=2.0.0
+google-auth-httplib2>=0.1.0
+google-auth-oauthlib>=0.5.0
+
+# ブラウザ操作
+selenium>=4.0.0
+webdriver-manager>=4.0.0
+
+# クリップボード操作
+pyperclip>=1.8.0
+
+# HTTP通信（GAS API連携用）
+requests>=2.28.0
+
+# タスクトレイ
+pystray>=0.19.0
+pillow>=10.0.0
+
+# テンプレートエンジン
+pyyaml>=6.0.0
+
+# exe化
+pyinstaller>=5.0.0

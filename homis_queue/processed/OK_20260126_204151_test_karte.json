@@ -1,0 +1,23 @@
+{
+    "action": "homis_karte_write",
+    "timestamp": "2026-01-26T19:25:00+09:00",
+    "data": {
+        "patientName": "テスト太郎",
+        "homisId": "2277808",
+        "orcaNumber": "001",
+        "shootingDate": "2026-01-26",
+        "shootingTime": "19:00",
+        "doctorName": "青木 浩",
+        "orders": [
+            {
+                "siteName": "胸部",
+                "direction": "PA",
+                "position": "立位",
+                "purpose": "結合テスト用",
+                "shotCount": 1
+            }
+        ],
+        "totalCount": 1,
+        "lookrecLink": "https://example.com/test"
+    }
+}
