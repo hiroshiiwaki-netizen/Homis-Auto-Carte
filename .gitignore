@@ -1,0 +1,40 @@
+# 機密情報
+src/config.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# ログファイル
+logs/
+*.log
+
+# 一時ファイル
+*.tmp
+*.bak
+*.swp
+*~
+
+# IDE
+.vscode/
+.idea/
+*.sublime-*
+
+# Windows
+desktop.ini
+Thumbs.db
+ehthumbs.db
+
+# テスト用
+tests/__pycache__/
+.pytest_cache/
+
+# 済フォルダ（運用データ）
+済/

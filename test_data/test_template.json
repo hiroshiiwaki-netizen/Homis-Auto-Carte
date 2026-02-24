@@ -1,0 +1,25 @@
+{
+    "template": "xray_karte",
+    "data": {
+        "orderId": "R-TEST-20260225",
+        "homisId": "2277808",
+        "patientName": "テスト 太郎",
+        "shootingDate": "2026-02-25",
+        "shootingTime": "07:20",
+        "shootingTimeEnd": "07:30",
+        "doctorName": "山口 高秀",
+        "sContent": "胸部レントゲン\n定期検査",
+        "apContent": "指示医：山口 高秀\nテスト太郎様XP 2026_02_25\n目的：定期検査\n部位：胸部正面PA（立位）\n撮影枚数：1枚\n合計：1枚",
+        "orders": [
+            {
+                "siteName": "胸部",
+                "direction": "正面PA",
+                "position": "立位",
+                "purpose": "定期検査",
+                "shotCount": 1
+            }
+        ],
+        "totalCount": 1,
+        "lookrecLink": ""
+    }
+}

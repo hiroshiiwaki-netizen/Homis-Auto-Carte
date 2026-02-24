@@ -1,0 +1,31 @@
+{
+    "action": "homis_karte_write",
+    "template": "xray_karte",
+    "created_at": "2026-02-04T10:32:00+09:00",
+    "data": {
+        "orderId": "SAMPLE_20260204_001",
+        "homisId": "2277808",
+        "patientName": "サンプル太郎",
+        "shootingDate": "2026-02-04",
+        "shootingDateDisplay": "2026/02/04(火)",
+        "shootingTime": "10:00",
+        "shootingTimeEnd": "10:10",
+        "requestDate": "2026_02_03",
+        "doctorName": "岩城 浩史",
+        "orcaNumber": "12345 ",
+        "sContent": "胸部正面レントゲン\n定期検査",
+        "apContent": "指示医：岩城 浩史\n12345 サンプル太郎様XP 2026_02_04 XP依頼日: 2026_02_03\n目的：定期検査\n部位：胸部正面PA（立位）\n撮影枚数：2枚\nhttps://lookrec.example.com/image/12345\n\n合計：2枚",
+        "orders": [
+            {
+                "siteName": "胸部正面",
+                "direction": "PA",
+                "position": "立位",
+                "purpose": "定期検査",
+                "shotCount": 2,
+                "siteString": "胸部正面PA（立位）"
+            }
+        ],
+        "totalCount": 2,
+        "lookrecLink": "https://lookrec.example.com/image/12345"
+    }
+}

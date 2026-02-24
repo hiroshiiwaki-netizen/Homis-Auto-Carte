@@ -1,0 +1,12 @@
+{
+  "watch_folder": "T:/共有ドライブ/レントゲンオーダー/Homis登録データ",
+  "processed_folder": "",
+  "poll_interval_seconds": 10,
+  "homis_url": "https://homis.jp/homic/",
+  "homis_user": "71241",
+  "homis_password": "qxuGND75",
+  "gas_web_app_url": "https://script.google.com/a/macros/nhw.jp/s/AKfycbzfiJcoERAk8vReS-2yx7QtrsUuJh2OOrFSWeNtcOdoXxpXTm7Ofzy3cmw0JlomMISm/exec",
+  "test_mode": true,
+  "test_patient_id": "2277808",
+  "headless": false
+}
