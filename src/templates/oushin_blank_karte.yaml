@@ -1,0 +1,81 @@
+# ============================================================
+# oushin_blank_karte.yaml - 往診白紙カルテ テンプレート
+# ============================================================
+# 【概要】
+#   Tukusiから指示を受けて往診の白紙カルテを自動作成する。
+#   Homis自動カルテ生成（watcher.py）が本ファイルを読み込んで実行する。
+#
+# 【変数】
+#   {homisId}       : HOMIS患者ID
+#   {visitDate}     : 往診日（YYYY-MM-DD）
+#   {doctorName}    : 担当医師名（例: 山口 高秀）
+#   {nextVisitDate} : 次回往診日（YYYY-MM-DD）※参考情報
+#
+# 【保存方法】
+#   「中断」ボタンで保存することで白紙カルテとして保存する。
+#   （「完了」ではなく「中断」＝後から編集可能な状態で保存）
+# ============================================================
+
+name: 往診白紙カルテ
+description: Tukusiから指示を受けた往診白紙カルテの自動作成
+version: "1.0"
+
+# 対象ページ（変数展開あり）
+target_url: "https://homis.jp/homic/?pid=patient_detail&patient_id={homisId}"
+
+# 認証設定
+auth:
+  type: homis
+  detect_login: true
+
+# ブラウザ操作ステップ
+steps:
+  - name: 新規ボタンをクリック
+    action: click
+    selector: "#karteNew"
+    wait_after: 2000
+
+  - name: 定期診療を選択
+    description: 往診カルテは「定期診療」（value=0）を選択する
+    action: click
+    selector: 'input[name="karte_type"][value="0"]'
+    wait_after: 1000
+
+  - name: 指示医を選択
+    action: select
+    selector: "#doctor018"
+    value: "{doctorName}"
+    wait_after: 1000
+
+  - name: 医科カルテボタンをクリック
+    action: click
+    selector_type: xpath
+    selector: "//a[contains(text(), '医科カルテ')]"
+    wait_after: 3000
+
+  - name: 診察日を入力
+    description: JavaScript経由で入力（Homis必須の方式）
+    action: js_input
+    selector: "#act_date"
+    value: "{visitDate}"
+    wait_after: 500
+
+  - name: 中断ボタンで保存（白紙カルテとして保存）
+    description: 「中断」で保存することで後から編集可能な白紙カルテになる
+    action: click
+    selector: "#karteInterruption"
+    confirm_alert: true
+    wait_after: 5000
+
+# 完了後にカルテURLを取得
+on_complete:
+  - name: リンクをコピー
+    action: click
+    selector_type: xpath
+    selector: "//a[contains(@onclick, 'copyLinkOfKarte')]"
+    wait_after: 1000
+
+# 結果取得方法（クリップボードからURLを取得）
+result:
+  type: clipboard
+  description: 作成したカルテのURL

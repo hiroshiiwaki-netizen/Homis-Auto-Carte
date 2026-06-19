@@ -9,7 +9,6 @@ v1.0.0 - 初版 (2026/01/26)
 
 import yaml
 import logging
-import pyperclip
 from pathlib import Path
 from typing import Dict, Any, Optional
 
@@ -186,6 +185,14 @@ class TemplateEngine:
             
             # 完了後処理
             on_complete = template.get("on_complete", [])
+            
+            # v1.6.0: on_completeに「リンクをコピー」が含まれる場合に備え、
+            # クリップボードを事前クリア（直前の内容混入防止）
+            result_config = template.get("result", {})
+            if result_config.get("type") == "clipboard":
+                from clipboard_utils import clear_clipboard
+                clear_clipboard()
+            
             for action in on_complete:
                 self.actions.execute_action(action, data)
             
@@ -199,15 +206,22 @@ class TemplateEngine:
             except Exception:
                 pass  # アラートがない場合は無視
             
-            # 結果取得
+            # 結果取得（v2.0.2: OhiScanGo方式 — クリップボード不要）
             result_config = template.get("result", {})
             if result_config.get("type") == "clipboard":
                 time.sleep(0.5)
                 try:
-                    result["karte_url"] = pyperclip.paste()
-                    logger.info(f"カルテURL: {result['karte_url']}")
-                except Exception:
-                    pass
+                    # OhiScanGo方式: ブラウザから直接URL取得
+                    from clipboard_utils import extract_karte_url
+                    result["karte_url"] = extract_karte_url(self.driver)
+                    if result["karte_url"] and "karte_id" in result["karte_url"]:
+                        logger.info(f"カルテURL: {result['karte_url']}")
+                    elif result["karte_url"]:
+                        logger.warning(f"カルテURL（karte_idなし）: {result['karte_url']}")
+                    else:
+                        logger.warning("カルテURL取得失敗")
+                except Exception as e:
+                    logger.warning(f"カルテURL取得エラー: {e}")
             
             result["success"] = True
             logger.info("✅ テンプレート実行成功")

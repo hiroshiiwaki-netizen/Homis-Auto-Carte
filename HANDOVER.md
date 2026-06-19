@@ -1,8 +1,54 @@
 # Homis自動カルテ生成 引継ぎ書
 
-> **最終更新**: 2026年2月25日 07:34
-> **バージョン**: v1.5.1
-> **ステータス**: ✅ 本番デプロイ済み・自動運用中
+> **最終更新**: 2026年6月19日 17:07
+> **バージョン**: v2.0.3
+> **ステータス**: ✅ 本番デプロイ済み・24時間自動運用中
+
+---
+
+## ✅ デプロイ済み（2026/06/19）
+
+### v2.0.3 OhiScanGo方式URL取得 (2026/06/19 17:07)
+
+| 機能 | 内容 |
+|------|------|
+| カルテURL取得 | クリップボード → **ブラウザ直接取得**に変更（headless対応） |
+| 優先度1 | `driver.current_url` に `karte_id` があればそれを返す |
+| 優先度2 | `copyLinkOfKarte` ボタンの onclick 属性からURL抽出 |
+| フォールバック | `karte_id` なし → 空文字（誤通知防止） |
+| 対象 | `template_engine.py` + `homis_writer.py` 両方 |
+
+### v2.0.2 パス一元管理 (2026/06/19 16:40)
+
+| 機能 | 内容 |
+|------|------|
+| `paths.py` 新規 | CODE_DIR / STATE_DIR / LOG_DIR / CONFIG_FILE を一元管理 |
+| ログ出力先 | 共有ドライブ `logs/`（`CODE_DIR / "logs"`） |
+| config読み込み | `C:\HomisKarteWriter\config.json` 優先 |
+| 起動ログ | CODE_DIR, STATE_DIR, LOG_DIR, CONFIG_FILE を出力（追跡用） |
+
+### v2.0.1 24時間稼働 + クリップボード修正 + 堅牢性強化
+
+| 機能 | 内容 |
+|------|------|
+| クリップボード修正 | `clipboard_utils.py` 新規。事前クリア + URL検証（homis.jp + /homic/） |
+| 適用箇所 | `homis_writer.py` + `template_engine.py` 両方修正 |
+| 日次リスタート | 22:00終了 → **0:00日次リスタート**に変更（`restart_time` 設定） |
+| ハートビートWatchdog | `heartbeat.txt` を60秒更新、`watchdog.bat` で5分死活監視 |
+| エラー自動復帰 | 30秒待機×3回リトライ。3回失敗→プロセス終了→Watchdog再起動 |
+| 7日24時間稼働 | ログオン時起動 + 5分Watchdog（旧: 月～金8:00起動） |
+| config後方互換 | 旧 `shutdown_time` → 新 `restart_time` フォールバック |
+| リスタート競合防止 | `restarting` ステータスで Watchdog が2分待機 |
+| リスタートループ防止 | `_last_restart_date` で1日1回ガード（v2.0.0） |
+| 単一インスタンス | PIDファイル方式で二重起動防止（v2.0.0） |
+| 起動時ハートビート | 起動直後に `starting` ステータスを書く（v2.0.0） |
+
+#### デプロイ手順（本番）
+1. **配置済み**: 共有ドライブ `G:\共有ドライブ\レントゲンオーダー\Homis転記実行ファイル` にコード一式
+2. 実行PCに `C:\HomisKarteWriter` フォルダを作成（状態ファイル用）
+3. 実行PCに config.json を `C:\HomisKarteWriter\` にコピー（`"restart_time": "00:00"` 設定済み）
+4. 実行PCで管理者権限で `setup_watchdog.bat` を実行（旧タスク削除 + 新タスク2本登録）
+5. 動作確認: `C:\HomisKarteWriter\heartbeat.txt` が更新されるか確認
 
 ---
 

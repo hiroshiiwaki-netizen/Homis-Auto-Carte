@@ -443,22 +443,20 @@ class HomisKarteWriter:
             except Exception as e:
                 logger.error(f"「完了」ボタンが見つかりません: {e}")
             
-            # Step 9: 「リンクをコピー」ボタンでURL取得（onclick="copyLinkOfKarte"）
-            logger.info("「リンクをコピー」ボタンを探しています...")
+            # Step 9: カルテURL取得（v2.0.2: OhiScanGo方式 — クリップボード不要）
+            logger.info("カルテURLを取得中...")
             try:
-                # copyLinkOfKarte関数を持つaタグを探す
-                link_button = self._wait_and_find(By.XPATH, "//a[contains(@onclick, 'copyLinkOfKarte')]")
-                link_button.click()
-                self._safe_sleep(self.WAIT_SHORT)
-                logger.info("「リンクをコピー」ボタンをクリック")
-                
-                # クリップボードからURLを取得
-                import pyperclip
-                karte_url = pyperclip.paste()
+                from clipboard_utils import extract_karte_url
+                karte_url = extract_karte_url(self.driver)
                 result["karte_url"] = karte_url
-                logger.info(f"カルテURL: {karte_url}")
+                if karte_url and "karte_id" in karte_url:
+                    logger.info(f"カルテURL: {karte_url}")
+                elif karte_url:
+                    logger.warning(f"カルテURL（karte_idなし）: {karte_url}")
+                else:
+                    logger.warning("カルテURL取得失敗（空のURLでGAS/Chat通知します）")
             except Exception as e:
-                logger.warning(f"リンクコピーをスキップ: {e}")
+                logger.warning(f"カルテURL取得をスキップ: {e}")
             
             result["success"] = True
             logger.info(f"✅ カルテ書き込み成功: {homis_id}")

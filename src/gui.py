@@ -9,6 +9,9 @@ v1.1.0 - タスクトレイ対応 (2026/01/26)
 v1.3.0 - 自動起動・自動終了・Google Chat通知 (2026/02/10)
 v1.4.0 - ヘッドレスモード設定・共有ドライブ配置 (2026/02/16)
 v1.5.0 - カルテ保存「中断」→「完了」に変更 (homis_writer.py変更) (2026/02/24)
+v1.6.0 - 24時間稼働: 日次リスタート(0:00)・ハートビートWatchdog・エラー自動復帰 (2026/06/19)
+v2.0.0 - リスタートループ修正・単一インスタンスロック・起動時ハートビート (2026/06/19)
+v2.0.1 - リスタート永続化+5分ウィンドウ・PIDロック解放修正 (2026/06/19)
 
 ※バージョン更新ルール:
   - GUIや設定の変更時: 下記 self.root.title() のバージョンも必ず更新すること
@@ -17,6 +20,7 @@ v1.5.0 - カルテ保存「中断」→「完了」に変更 (homis_writer.py変
 """
 
 import os
+import logging
 import sys
 import json
 import threading
@@ -39,6 +43,12 @@ from watcher import FolderWatcher, load_config, save_config
 
 # Google Chat通知モジュール
 from chat_notifier import notify_startup, notify_shutdown, notify_error
+
+# v2.0.2: パス一元管理
+from paths import STATE_DIR, HEARTBEAT_FILE, PID_FILE, LAST_RESTART_FILE
+
+# ロガー設定
+logger = logging.getLogger(__name__)
 
 # ============================================================
 # 設定ダイアログ
@@ -111,17 +121,18 @@ class SettingsDialog:
         self.auto_start_var = tk.BooleanVar(value=self.config.get("auto_start", True))
         ttk.Checkbutton(schedule_frame, text="起動時にフォルダ監視を自動開始", variable=self.auto_start_var).pack(anchor=tk.W, pady=2)
         
-        # 自動終了
+        # v1.6.0: 日次リスタート設定（旧: 自動終了）
         schedule_config = self.config.get("schedule", {})
-        auto_shutdown_frame = ttk.Frame(schedule_frame)
-        auto_shutdown_frame.pack(fill=tk.X, pady=2)
+        restart_frame = ttk.Frame(schedule_frame)
+        restart_frame.pack(fill=tk.X, pady=2)
         
-        self.auto_shutdown_var = tk.BooleanVar(value=schedule_config.get("auto_shutdown", True))
-        ttk.Checkbutton(auto_shutdown_frame, text="自動終了:", variable=self.auto_shutdown_var).pack(side=tk.LEFT)
+        ttk.Label(restart_frame, text="🔄 日次リスタート:").pack(side=tk.LEFT)
         
-        self.shutdown_time_var = tk.StringVar(value=schedule_config.get("shutdown_time", "22:00"))
-        ttk.Entry(auto_shutdown_frame, textvariable=self.shutdown_time_var, width=8).pack(side=tk.LEFT, padx=5)
-        ttk.Label(auto_shutdown_frame, text="（HH:MM形式）", font=("メイリオ", 7), foreground="gray").pack(side=tk.LEFT)
+        # v1.6.0: configフォールバック（restart_time優先、なければ 00:00）
+        restart_default = schedule_config.get("restart_time", "00:00")
+        self.restart_time_var = tk.StringVar(value=restart_default)
+        ttk.Entry(restart_frame, textvariable=self.restart_time_var, width=8).pack(side=tk.LEFT, padx=5)
+        ttk.Label(restart_frame, text="（HH:MM形式・デフォルト00:00）", font=("メイリオ", 7), foreground="gray").pack(side=tk.LEFT)
         
         # ============================================================
         # ブラウザ設定エリア
@@ -168,12 +179,12 @@ class SettingsDialog:
     
     def _save(self):
         """設定を保存"""
-        # 終了時刻のバリデーション
-        shutdown_time = self.shutdown_time_var.get()
+        # v1.6.0: リスタート時刻のバリデーション
+        restart_time = self.restart_time_var.get()
         try:
-            datetime.strptime(shutdown_time, "%H:%M")
+            datetime.strptime(restart_time, "%H:%M")
         except ValueError:
-            messagebox.showerror("入力エラー", "終了時刻はHH:MM形式で入力してください（例: 22:00）")
+            messagebox.showerror("入力エラー", "リスタート時刻はHH:MM形式で入力してください（例: 00:00）")
             return
         
         self.config["watch_folder"] = self.watch_folder_var.get()
@@ -183,9 +194,11 @@ class SettingsDialog:
         self.config["gas_web_app_url"] = self.gas_url_var.get()
         self.config["auto_start"] = self.auto_start_var.get()
         self.config["schedule"] = {
-            "auto_shutdown": self.auto_shutdown_var.get(),
-            "shutdown_time": shutdown_time,
+            "restart_time": restart_time,
         }
+        # v2.0.0: 旧キーを明示削除（configをクリーンに保つ）
+        self.config["schedule"].pop("auto_shutdown", None)
+        self.config["schedule"].pop("shutdown_time", None)
         self.config["chat_webhook_url"] = self.chat_webhook_var.get()
         self.config["headless"] = self.headless_var.get()
         
@@ -218,8 +231,8 @@ class HomisCardGeneratorGUI:
     
     def __init__(self, root):
         self.root = root
-        self.root.title("Homis自動カルテ生成 v1.4.0")  # GUI変更時は必ずここも更新すること！
-        self.root.geometry("450x350")
+        self.root.title("Homis自動カルテ生成 v2.0.3")
+        self.root.geometry("580x600")
         
         # 設定読み込み
         self.config = load_config()
@@ -233,8 +246,18 @@ class HomisCardGeneratorGUI:
         self.tray_icon = None
         self.is_hidden = False
         
-        # スケジュール自動終了用タイマーID
+        # v1.6.0: スケジュールタイマーID（リスタート用）
         self._shutdown_timer_id = None
+        
+        # v1.6.0: ハートビート用タイマーID
+        self._heartbeat_timer_id = None
+        
+        # v1.6.0: エラー自動復帰のリトライカウンター
+        self._error_retry_count = 0
+        self._max_error_retries = 3
+        
+        # v2.0.1: 日次リスタートガード（ファイル永続化）
+        self._last_restart_date = self._load_last_restart_date()
         
         # UI構築
         self._build_ui()
@@ -254,6 +277,9 @@ class HomisCardGeneratorGUI:
         
         # 起動時の自動開始チェック（タスクトレイ格納後に実行）
         self.root.after(800, self._auto_start_check)
+        
+        # v2.0.0: 起動直後にハートビートを書く（Watchdogが「死んだ」と誤判定しないよう）
+        self._write_heartbeat("starting")
     
     def _auto_start_check(self):
         """起動時に設定をチェックして自動的にフォルダ監視を開始"""
@@ -504,10 +530,8 @@ class HomisCardGeneratorGUI:
         
         # スケジュール表示
         schedule = self.config.get("schedule", {})
-        if schedule.get("auto_shutdown", False):
-            schedule_text = f"⏹ 自動終了: {schedule.get('shutdown_time', '22:00')}"
-        else:
-            schedule_text = "⏹ 自動終了: 無効"
+        restart_time = schedule.get("restart_time", "00:00")
+        schedule_text = f"🔄 日次リスタート: {restart_time}"
         self.schedule_label = ttk.Label(config_frame, text=schedule_text, font=("メイリオ", 7))
         self.schedule_label.pack(anchor=tk.W)
         
@@ -621,10 +645,8 @@ class HomisCardGeneratorGUI:
         
         # スケジュール表示を更新
         schedule = self.config.get("schedule", {})
-        if schedule.get("auto_shutdown", False):
-            schedule_text = f"⏹ 自動終了: {schedule.get('shutdown_time', '22:00')}"
-        else:
-            schedule_text = "⏹ 自動終了: 無効"
+        restart_time = schedule.get("restart_time", "00:00")
+        schedule_text = f"🔄 日次リスタート: {restart_time}"
         self.schedule_label.config(text=schedule_text)
         
         self._add_log("設定を更新しました", "SUCCESS")
@@ -731,66 +753,145 @@ class HomisCardGeneratorGUI:
             self.root.after(0, lambda: self._add_log(f"⚠️ Chat通知エラー: {e}", "WARNING"))
     
     def _start_shutdown_timer(self):
-        """スケジュール自動終了タイマーを開始"""
+        """v1.6.0: 日次リスタートタイマーを開始（旧: 自動終了タイマー）"""
         schedule = self.config.get("schedule", {})
-        if not schedule.get("auto_shutdown", False):
-            return
         
-        shutdown_time_str = schedule.get("shutdown_time", "22:00")
-        self._add_log(f"⏹ 自動終了タイマー設定: {shutdown_time_str}")
+        # v1.6.0: configフォールバック
+        # 新キー restart_time を優先、なければ "00:00"（24時間稼働デフォルト）
+        restart_time_str = schedule.get("restart_time", "00:00")
+        
+        # 旧キー auto_shutdown が残っている場合、警告を1回だけ出す
+        if "shutdown_time" in schedule and "restart_time" not in schedule:
+            old_time = schedule.get("shutdown_time", "22:00")
+            self._add_log(
+                f"⚠️ 旧設定 shutdown_time: {old_time} を検出。"
+                f"v1.6.0以降は restart_time を使用してください。"
+                f"デフォルト 00:00 で日次リスタートします。",
+                "WARNING"
+            )
+        
+        self._add_log(f"🔄 日次リスタートタイマー設定: {restart_time_str}")
         
         # 1分ごとに時刻をチェック
-        self._check_shutdown_time(shutdown_time_str)
+        self._check_restart_time(restart_time_str)
+        
+        # v1.6.0: ハートビート書き込み開始
+        self._start_heartbeat()
     
-    def _check_shutdown_time(self, shutdown_time_str: str):
-        """現在時刻とシャットダウン時刻を比較"""
+    def _check_restart_time(self, restart_time_str: str):
+        """v2.0.1: 現在時刻とリスタート時刻を比較（永続化+5分ウィンドウ）"""
         if not self.is_running:
             return
         
         try:
             now = datetime.now()
-            shutdown_time = datetime.strptime(shutdown_time_str, "%H:%M").replace(
+            restart_time = datetime.strptime(restart_time_str, "%H:%M").replace(
                 year=now.year, month=now.month, day=now.day
             )
             
-            if now >= shutdown_time:
-                # 終了時刻を過ぎた → 自動終了
-                self._add_log(f"⏹ スケジュール終了時刻（{shutdown_time_str}）になりました", "WARNING")
-                self._scheduled_shutdown()
-                return
+            # v2.0.1: ファイル永続化でプロセス再起動後も同日リスタートをブロック
+            if self._last_restart_date == now.date():
+                # 今日はもうリスタート済み → 翌日までスキップ
+                pass
+            elif now >= restart_time:
+                # v2.0.1: 5分ウィンドウ — 8:00起動で即リスタートしない
+                elapsed = (now - restart_time).total_seconds()
+                if elapsed < 300:  # 5分以内のみ発火
+                    self._last_restart_date = now.date()
+                    self._save_last_restart_date(now.date())
+                    self._add_log(f"🔄 日次リスタート時刻（{restart_time_str}）になりました", "WARNING")
+                    self._scheduled_restart()
+                    return
         except ValueError:
-            self._add_log(f"⚠️ 終了時刻の形式が不正: {shutdown_time_str}", "ERROR")
+            self._add_log(f"⚠️ リスタート時刻の形式が不正: {restart_time_str}", "ERROR")
             return
         
         # 60秒後に再チェック
-        self._shutdown_timer_id = self.root.after(60000, self._check_shutdown_time, shutdown_time_str)
+        self._shutdown_timer_id = self.root.after(60000, self._check_restart_time, restart_time_str)
     
-    def _scheduled_shutdown(self):
-        """スケジュールに基づいてアプリを終了"""
-        self._add_log("🌙 自動終了処理を開始します...", "WARNING")
+    def _get_restart_date_path(self):
+        """v2.0.2: last_restart.txt のパスを返す（paths.py一元管理）"""
+        return LAST_RESTART_FILE
+    
+    def _load_last_restart_date(self):
+        """v2.0.1: ファイルから最終リスタート日を読み込む"""
+        try:
+            path = self._get_restart_date_path()
+            if path.exists():
+                date_str = path.read_text().strip()
+                from datetime import date
+                return datetime.strptime(date_str, "%Y-%m-%d").date()
+        except Exception:
+            pass
+        return None
+    
+    def _save_last_restart_date(self, d):
+        """v2.0.1: 最終リスタート日をファイルに保存"""
+        try:
+            path = self._get_restart_date_path()
+            path.write_text(str(d))
+        except Exception as e:
+            logger.warning(f"リスタート日保存失敗: {e}")
+    
+    def _start_heartbeat(self):
+        """v1.6.0: ハートビートファイルを60秒ごとに更新（Watchdog用）"""
+        self._write_heartbeat("running")
+        # 60秒後に再度書き込み
+        self._heartbeat_timer_id = self.root.after(60000, self._heartbeat_tick)
+    
+    def _heartbeat_tick(self):
+        """v1.6.0: ハートビート定期更新"""
+        if not self.is_running:
+            self._write_heartbeat("stopped")
+            return
+        self._write_heartbeat("running")
+        self._heartbeat_timer_id = self.root.after(60000, self._heartbeat_tick)
+    
+    def _write_heartbeat(self, status: str):
+        """v2.0.2: ハートビートファイルを書き込む（paths.py一元管理）"""
+        try:
+            import json
+            heartbeat_path = HEARTBEAT_FILE
+            with open(heartbeat_path, "w", encoding="utf-8") as f:
+                f.write(json.dumps({
+                    "timestamp": datetime.now().isoformat(),
+                    "status": status,
+                    "version": "2.0.3",
+                    "pid": os.getpid()
+                }))
+        except Exception as e:
+            logger.warning(f"ハートビート書き込み失敗: {e}")
+    
+    def _scheduled_restart(self):
+        """v1.6.0: 日次リスタート（0:00）— Watchdogが再起動してくれる"""
+        self._add_log("🔄 日次リスタート処理を開始します...", "WARNING")
+        
+        # ハートビートに restarting ステータスを書く（Watchdogが2分待つ用）
+        self._write_heartbeat("restarting")
         
         # 監視停止
         self.is_running = False
         if self.watcher:
             self.watcher.stop()
         
-        # Google Chat終了通知
+        # Google Chat通知
         webhook_url = self.config.get("chat_webhook_url", "")
         if webhook_url:
             try:
-                notify_shutdown(webhook_url, "スケジュール終了（22:00）")
-                self._add_log("📤 Google Chat終了通知を送信しました", "SUCCESS")
+                notify_shutdown(webhook_url, "🔄 日次リスタート（0:00）— Watchdogが再起動します")
+                self._add_log("📤 Google Chat日次リスタート通知を送信しました", "SUCCESS")
             except Exception as e:
-                self._add_log(f"⚠️ 終了通知エラー: {e}", "WARNING")
+                self._add_log(f"⚠️ リスタート通知エラー: {e}", "WARNING")
         
-        # 3秒後にアプリを終了（通知送信の猶予）
+        # 3秒後にアプリを終了（Watchdogが再起動する）
         self.root.after(3000, self._cleanup_and_quit)
     
     def _run_watcher(self):
         """フォルダ監視を実行（別スレッド）"""
-        try:
-            import time
-            while self.is_running:
+        import time
+        
+        while self.is_running:
+            try:
                 # フォルダをスキャン
                 files = self.watcher.scan_folder()
                 
@@ -806,24 +907,44 @@ class HomisCardGeneratorGUI:
                 # v7.7.6: 集団検診グループの完了チェック
                 self.watcher.check_groups()
                 
+                # v1.6.0: エラーリトライカウンターをリセット（正常動作中）
+                self._error_retry_count = 0
+                
                 # 待機
                 time.sleep(self.watcher.poll_interval)
                 
-        except Exception as e:
-            error_msg = str(e)
-            self._add_log(f"❌ 異常エラー: {error_msg}", "ERROR")
-            
-            # Google Chatにエラー通知
-            webhook_url = self.config.get("chat_webhook_url", "")
-            if webhook_url:
-                try:
-                    notify_error(webhook_url, error_msg)
-                    self._add_log("📤 Google Chatエラー通知を送信しました", "WARNING")
-                except Exception:
-                    pass
-            
-            self.is_running = False
-            self.root.after(0, self._update_status)
+            except Exception as e:
+                error_msg = str(e)
+                self._error_retry_count += 1
+                self._add_log(
+                    f"❌ 異常エラー（{self._error_retry_count}/{self._max_error_retries}）: {error_msg}",
+                    "ERROR"
+                )
+                
+                # Google Chatにエラー通知
+                webhook_url = self.config.get("chat_webhook_url", "")
+                if webhook_url:
+                    try:
+                        notify_error(webhook_url, f"エラー({self._error_retry_count}/{self._max_error_retries}): {error_msg}")
+                    except Exception:
+                        pass
+                
+                # v1.6.0: 最大リトライ回数に達したらプロセス終了（Watchdog任せ）
+                if self._error_retry_count >= self._max_error_retries:
+                    self._add_log(
+                        f"💀 {self._max_error_retries}回連続エラー — プロセスを終了します（Watchdogが再起動）",
+                        "ERROR"
+                    )
+                    self.is_running = False
+                    self.root.after(0, self._update_status)
+                    # ハートビートを error に更新
+                    self._write_heartbeat("error_exit")
+                    self.root.after(3000, self._cleanup_and_quit)
+                    return
+                
+                # v1.6.0: 30秒待機後にリトライ
+                self._add_log(f"⏳ 30秒後に自動復帰します...", "WARNING")
+                time.sleep(30)
     
     def _stop_watcher(self):
         """フォルダ監視を停止"""
@@ -840,11 +961,62 @@ class HomisCardGeneratorGUI:
         self._add_log("フォルダ監視を停止しました", "WARNING")
 
 
+def _acquire_instance_lock():
+    """v2.0.2: 単一インスタンスロック（paths.py一元管理）"""
+    pid_path = PID_FILE
+    
+    my_pid = os.getpid()
+    
+    if pid_path.exists():
+        try:
+            old_pid = int(pid_path.read_text().strip())
+            # 古いPIDのプロセスが生きているかチェック
+            import ctypes
+            kernel32 = ctypes.windll.kernel32
+            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, old_pid)
+            if handle:
+                kernel32.CloseHandle(handle)
+                # プロセスが生きている → 二重起動
+                logger.warning(f"⚠️ 別のインスタンスが稼働中です（PID: {old_pid}）")
+                return False
+            # プロセスが死んでいる → 古いPIDファイルを削除
+        except Exception:
+            pass  # PIDファイルが壊れている場合は上書き
+    
+    # PIDファイルを書き込む
+    pid_path.write_text(str(my_pid))
+    logger.info(f"インスタンスロック取得（PID: {my_pid}）")
+    return True
+
+
+def _release_instance_lock():
+    """v2.0.2: PIDファイルを削除（自 PID と一致するときのみ）"""
+    pid_path = PID_FILE
+    
+    try:
+        if pid_path.exists():
+            # v2.0.1: 自 PID と一致するときのみ削除（他インスタンスのPIDを消さない）
+            stored_pid = pid_path.read_text().strip()
+            if stored_pid == str(os.getpid()):
+                pid_path.unlink()
+    except Exception:
+        pass
+
+
 def main():
     """メイン関数"""
-    root = tk.Tk()
-    app = HomisCardGeneratorGUI(root)
-    root.mainloop()
+    # v2.0.1: 単一インスタンスチェック
+    if not _acquire_instance_lock():
+        print("別のインスタンスが既に稼働中です。終了します。")
+        return
+    
+    try:
+        root = tk.Tk()
+        app = HomisCardGeneratorGUI(root)
+        root.mainloop()
+    finally:
+        _release_instance_lock()
 
 
 if __name__ == "__main__":

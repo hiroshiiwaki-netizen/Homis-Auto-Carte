@@ -29,12 +29,11 @@ MODULE_VERSION = "1.0"
 MODULE_VERSION_DATE = "2026-01-26"
 
 # ============================================================
-# パス設定
+# パス設定（paths.py で一元管理）
 # ============================================================
-SRC_DIR = Path(__file__).parent
-CONFIG_FILE = SRC_DIR / "config.json"
-LOG_DIR = SRC_DIR / "logs"
-LOG_DIR.mkdir(exist_ok=True)
+from paths import CODE_DIR, STATE_DIR, LOG_DIR, CONFIG_FILE
+
+SRC_DIR = CODE_DIR  # 後方互換
 
 # ============================================================
 # ログ設定
@@ -51,6 +50,11 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
+# 起動時にパス情報をログ出力（どのコードが動いているか追跡用）
+logger.info(f"CODE_DIR: {CODE_DIR}")
+logger.info(f"STATE_DIR: {STATE_DIR}")
+logger.info(f"LOG_DIR: {LOG_DIR}")
+logger.info(f"CONFIG_FILE: {CONFIG_FILE}")
 
 # ============================================================
 # デフォルト設定
@@ -207,14 +211,18 @@ class FolderWatcher:
             karte_data = data.get("data", {})
             order_id = karte_data.get("orderId", "")
             
+            # job_idはdata直下にある（往診カルテの場合のみ存在）
+            job_id = data.get("job_id", "")
+
             if result["success"]:
                 logger.info(f"✅ 処理成功: {file_path.name}")
                 
                 # カルテURL
                 karte_url = result.get("karte_url", "")
                 
-                # GAS連携
-                if order_id:
+                # GAS連携（既存：レントゲンナビ向け）
+                # ※往診カルテ（job_idあり）はレントゲンナビGASに通知しない
+                if order_id and not job_id:
                     if is_group and group_id:
                         # 集団検診の場合：個別通知はスキップ、グループ追跡のみ
                         self._notify_gas(order_id, karte_url or "")
@@ -224,6 +232,20 @@ class FolderWatcher:
                         # 通常オーダーの場合：通常通り通知
                         self._notify_gas(order_id, karte_url or "")
                 
+                # 往診カルテ用：結果ファイル書き込み（job_idがある場合のみ）
+                if job_id:
+                    self._write_result_file(job_id, karte_url or "", success=True)
+                    # 往診専用チャット通知（成功）
+                    karte_data_for_notify = data.get("data", {})
+                    self._notify_oushin_chat(
+                        success=True,
+                        homis_id=karte_data_for_notify.get("homisId", ""),
+                        visit_date=karte_data_for_notify.get("visitDate", ""),
+                        doctor_name=karte_data_for_notify.get("doctorName", ""),
+                        karte_url=karte_url or "",
+                        next_visit_date=karte_data_for_notify.get("nextVisitDate", "")
+                    )
+                
                 # 処理済みフォルダに移動
                 self._move_to_processed(file_path, success=True)
                 return True
@@ -231,10 +253,25 @@ class FolderWatcher:
                 logger.error(f"❌ 処理失敗: {file_path.name}")
                 
                 # 失敗時もGAS連携（空のURLで通知）
-                if order_id:
+                # ※往診カルテ（job_idあり）はレントゲンナビGASに通知しない
+                if order_id and not job_id:
                     self._notify_gas(order_id, "")
                     if is_group and group_id:
                         self._track_group(group_id)
+                
+                # 往診カルテ用：失敗も結果ファイルに書き込む
+                if job_id:
+                    err_msg = result.get("error", "HOMIS操作が失敗しました")
+                    self._write_result_file(job_id, "", success=False, error=err_msg)
+                    # 往診専用チャット通知（失敗）
+                    karte_data_for_notify = data.get("data", {})
+                    self._notify_oushin_chat(
+                        success=False,
+                        homis_id=karte_data_for_notify.get("homisId", ""),
+                        visit_date=karte_data_for_notify.get("visitDate", ""),
+                        doctor_name=karte_data_for_notify.get("doctorName", ""),
+                        error=err_msg
+                    )
                 
                 self._move_to_processed(file_path, success=False)
                 return False
@@ -363,6 +400,92 @@ class FolderWatcher:
         except Exception as e:
             logger.warning(f"⚠️ GAS連携エラー: {e}")
     
+    def _write_result_file(self, job_id: str, karte_url: str, success: bool, error: str = ""):
+        """
+        往診カルテ専用：GASポーリング用の結果ファイルをフォルダに書き込む
+        
+        ※ config.json に "oushin_result_folder" が設定されている場合のみ動作。
+        ※ 既存のレントゲンカルテ処理には一切影響しない（job_idがある場合のみ呼ばれる）。
+        
+        書き込むファイル: result_{job_id}.json
+        書き込む内容: { "success": bool, "karte_url": str, "error": str }
+        """
+        result_folder = self.config.get("oushin_result_folder", "")
+        if not result_folder:
+            logger.info("ℹ️ oushin_result_folder未設定のため結果ファイル書き込みをスキップ")
+            return
+        
+        try:
+            result_dir = Path(result_folder)
+            result_dir.mkdir(parents=True, exist_ok=True)
+            
+            result_data = {
+                "job_id": job_id,
+                "success": success,
+                "karte_url": karte_url,
+                "error": error,
+                "processed_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            }
+            
+            result_file = result_dir / f"result_{job_id}.json"
+            with open(result_file, "w", encoding="utf-8") as f:
+                json.dump(result_data, f, ensure_ascii=False, indent=2)
+            
+            logger.info(f"📝 結果ファイル書き込み完了: {result_file.name} (success={success})")
+        except Exception as e:
+            logger.error(f"⚠️ 結果ファイル書き込みエラー: {e}")
+    
+    def _notify_oushin_chat(self, success: bool, homis_id: str = "",
+                             visit_date: str = "", doctor_name: str = "",
+                             karte_url: str = "", next_visit_date: str = "",
+                             error: str = ""):
+        """
+        往診カルテ専用：Google Chatに完了通知を送る
+
+        ※ config.json に "oushin_chat_webhook_url" が設定されている場合のみ動作。
+        ※ 既存のレントゲンカルテ通知（chat_webhook_url）とは別のWebhookを使用。
+        """
+        webhook_url = self.config.get("oushin_chat_webhook_url", "")
+        if not webhook_url:
+            logger.info("ℹ️ oushin_chat_webhook_url未設定のためチャット通知をスキップ")
+            return
+
+        try:
+            import urllib.request
+            
+            if success:
+                next_info = f"\n📅 次回往診日: {next_visit_date}" if next_visit_date else ""
+                karte_info = f"\n🔗 カルテURL: {karte_url}" if karte_url else ""
+                text = (
+                    f"✅ 往診白紙カルテ作成完了\n"
+                    f"👨‍⚕️ 担当医: {doctor_name}\n"
+                    f"🏥 患者ID（HOMIS）: {homis_id}\n"
+                    f"📆 往診日: {visit_date}"
+                    f"{next_info}"
+                    f"{karte_info}"
+                )
+            else:
+                text = (
+                    f"❌ 往診白紙カルテ作成失敗\n"
+                    f"👨‍⚕️ 担当医: {doctor_name}\n"
+                    f"🏥 患者ID（HOMIS）: {homis_id}\n"
+                    f"📆 往診日: {visit_date}\n"
+                    f"⚠️ エラー内容: {error}"
+                )
+            
+            payload = json.dumps({"text": text}).encode("utf-8")
+            req = urllib.request.Request(
+                webhook_url,
+                data=payload,
+                headers={"Content-Type": "application/json"},
+                method="POST"
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                logger.info(f"💬 往診チャット通知送信完了 (status={resp.status})")
+
+        except Exception as e:
+            logger.warning(f"⚠️ 往診チャット通知エラー（続行）: {e}")
+
     def _move_to_processed(self, file_path: Path, success: bool = True):
         """処理済みフォルダに移動（ファイル名はそのまま）"""
         try:
