@@ -231,7 +231,7 @@ class HomisCardGeneratorGUI:
     
     def __init__(self, root):
         self.root = root
-        self.root.title("Homis自動カルテ生成 v2.0.3")
+        self.root.title("Homis自動カルテ生成 v2.1.0")
         self.root.geometry("580x600")
         
         # 設定読み込み
@@ -856,7 +856,7 @@ class HomisCardGeneratorGUI:
                 f.write(json.dumps({
                     "timestamp": datetime.now().isoformat(),
                     "status": status,
-                    "version": "2.0.3",
+                    "version": "2.1.0",
                     "pid": os.getpid()
                 }))
         except Exception as e:

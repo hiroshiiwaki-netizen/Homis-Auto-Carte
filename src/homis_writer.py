@@ -18,8 +18,8 @@ JSONファイルの内容をHomisのカルテに登録する
 # ============================================================
 # バージョン情報
 # ============================================================
-MODULE_VERSION = "1.0"
-MODULE_VERSION_DATE = "2026-01-26"
+MODULE_VERSION = "2.1.0"
+MODULE_VERSION_DATE = "2026-06-29"
 
 import os
 import time
@@ -416,45 +416,59 @@ class HomisKarteWriter:
             
             # Step 8: 「完了」ボタンで保存（id="karteCompletion"）
             # ============================================================
-            # 【重要】完了ボタン後にアラートが2回出る (2026/02/25 検証済み)
-            #  1回目: 確認アラート → OK
-            #  2回目: 確認アラート → OK
-            #  その後、画面が遷移して「リンクをコピー」ボタンが表示される
+            # v2.1.0: Go版(OhiScanGo)と同じ方式
+            #   - 保存前にJS上書きでconfirm/alertを自動OK
+            #   - タイミング依存なし（旧: Alert().accept()で後追い）
+            #   - 保存後は目的ベース待機（karte_id in URL or copyLinkOfKarte出現）
             # ============================================================
             logger.info("「完了」ボタンを探しています...")
             try:
+                # 【修正A】アラートをJS上書きで自動OK（Go版と同じ方式）
+                # confirm/alertを上書きしてから完了ボタンをクリック
+                # → タイミング依存なし・ダイアログ未処理エラーを完全回避
+                self.driver.execute_script("""
+                    window._origConfirm = window.confirm;
+                    window._origAlert   = window.alert;
+                    window.confirm = () => true;
+                    window.alert   = () => {};
+                """)
+                logger.info("アラート自動OK設定完了（JS上書き）")
+                
                 save_button = self._wait_and_find(By.ID, "karteCompletion")
                 save_button.click()
-                logger.info("「完了」ボタンをクリック")
+                logger.info("「完了」ボタンをクリック（ダイアログ自動OK）")
                 
-                # アラートが2回出るので両方OKを押す
-                from selenium.webdriver.common.alert import Alert
-                for i in range(2):
-                    self._safe_sleep(self.WAIT_SHORT)
-                    try:
-                        alert = Alert(self.driver)
-                        alert.accept()
-                        logger.info(f"アラート{i+1}回目でOKをクリック")
-                    except Exception:
-                        logger.info(f"アラート{i+1}回目はありませんでした")
+                # Go版と同じ: まず短い固定sleep（HOMISサーバー処理時間の最低保証）
+                self._safe_sleep(self.WAIT_MEDIUM)  # 2秒
                 
-                self._safe_sleep(self.WAIT_LONG)  # 画面遷移を待つ
-                logger.info("保存完了・画面遷移待ち")
+                # 【修正B】目的ベース待機: karte_id付きURLか、copyLinkOfKarteが出るまで待つ
+                # Go版の MustWaitStable() に相当。ただし動的DOM変化に依存せず、
+                # 「保存が完了して遷移した証拠」を直接待つため安定性が高い
+                logger.info("画面遷移待機中（karte_id or copyLinkOfKarte）...")
+                try:
+                    WebDriverWait(self.driver, 20).until(
+                        lambda d: "karte_id" in d.current_url
+                        or len(d.find_elements(By.CSS_SELECTOR, 'a[onclick*="copyLinkOfKarte"]')) > 0
+                    )
+                    logger.info("✅ 保存完了・画面遷移確認")
+                except TimeoutException:
+                    logger.warning("⚠️ 画面遷移待ちタイムアウト（20秒）— URL取得を試みます")
+                
             except Exception as e:
                 logger.error(f"「完了」ボタンが見つかりません: {e}")
             
-            # Step 9: カルテURL取得（v2.0.2: OhiScanGo方式 — クリップボード不要）
+            # Step 9: カルテURL取得（v2.1.0: リトライ付き — 5回・2秒間隔）
             logger.info("カルテURLを取得中...")
             try:
-                from clipboard_utils import extract_karte_url
-                karte_url = extract_karte_url(self.driver)
+                from clipboard_utils import extract_karte_url_with_retry
+                karte_url = extract_karte_url_with_retry(self.driver)
                 result["karte_url"] = karte_url
                 if karte_url and "karte_id" in karte_url:
-                    logger.info(f"カルテURL: {karte_url}")
+                    logger.info(f"✅ カルテURL: {karte_url}")
                 elif karte_url:
-                    logger.warning(f"カルテURL（karte_idなし）: {karte_url}")
+                    logger.warning(f"⚠️ カルテURL（karte_idなし）: {karte_url}")
                 else:
-                    logger.warning("カルテURL取得失敗（空のURLでGAS/Chat通知します）")
+                    logger.error("❌ カルテURL取得失敗（リトライ後も取得不可）")
             except Exception as e:
                 logger.warning(f"カルテURL取得をスキップ: {e}")
             

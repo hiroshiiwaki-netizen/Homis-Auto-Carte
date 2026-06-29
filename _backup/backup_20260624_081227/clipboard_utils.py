@@ -4,10 +4,6 @@
 ============================
 HOMISカルテURLの安全な取得を提供する共通ヘルパー。
 
-v2.1.0 - リトライ改善 (2026/06/29)
-  - extract_karte_url_with_retry(): 3回×3秒 → 5回×2秒に変更
-  - homis_writer.py 側で目的ベース待機後に呼ぶ前提
-
 v2.0.2 - OhiScanGo方式追加 (2026/06/19)
   - extract_karte_url(): ブラウザから直接URL取得（クリップボード不要）
     優先度1: ブラウザ現在URL（karte_id含む場合）
@@ -163,43 +159,3 @@ def extract_karte_url(driver) -> str:
     except Exception as e:
         logger.error(f"カルテURL取得エラー: {e}")
         return ""
-
-
-def extract_karte_url_with_retry(driver, max_attempts: int = 5, interval_sec: int = 2) -> str:
-    """
-    v2.1.0: リトライ付きカルテURL取得。
-
-    extract_karte_url() を最大 max_attempts 回試行する。
-    1回目の失敗後、interval_sec 秒待ってから再試行。
-    v2.0.4: 3回×3秒 → v2.1.0: 5回×2秒（目的ベース待機後に呼ばれる前提）
-
-    Args:
-        driver: Selenium WebDriver インスタンス
-        max_attempts: 最大試行回数（デフォルト5）
-        interval_sec: 試行間の待機秒数（デフォルト2）
-
-    Returns:
-        str: karte_id 付きカルテURL。全試行失敗時は空文字列。
-    """
-    import time
-
-    for attempt in range(1, max_attempts + 1):
-        url = extract_karte_url(driver)
-        if url and "karte_id" in url:
-            if attempt > 1:
-                logger.info(f"✅ リトライ成功（{attempt}/{max_attempts}回目）")
-            return url
-
-        if attempt < max_attempts:
-            logger.warning(
-                f"⚠️ カルテURL取得 試行 {attempt}/{max_attempts} 失敗 — "
-                f"{interval_sec}秒後にリトライします"
-            )
-            time.sleep(interval_sec)
-        else:
-            logger.error(
-                f"❌ カルテURL取得 全{max_attempts}回失敗 — "
-                f"karte_id付きURLを取得できませんでした"
-            )
-
-    return ""

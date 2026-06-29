@@ -211,9 +211,9 @@ class TemplateEngine:
             if result_config.get("type") == "clipboard":
                 time.sleep(0.5)
                 try:
-                    # OhiScanGo方式: ブラウザから直接URL取得
-                    from clipboard_utils import extract_karte_url
-                    result["karte_url"] = extract_karte_url(self.driver)
+                    # v2.0.4: リトライ付きURL取得（3回・3秒間隔）
+                    from clipboard_utils import extract_karte_url_with_retry
+                    result["karte_url"] = extract_karte_url_with_retry(self.driver)
                     if result["karte_url"] and "karte_id" in result["karte_url"]:
                         logger.info(f"カルテURL: {result['karte_url']}")
                     elif result["karte_url"]:

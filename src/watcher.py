@@ -220,17 +220,51 @@ class FolderWatcher:
                 # カルテURL
                 karte_url = result.get("karte_url", "")
                 
+                # v2.0.4: 成功 + 空URL → GAS通知スキップ（karte_idなし誤通知を防ぐ）
+                # ※ JSONは済へ移動して再処理しない（二重カルテ防止）
+                # ※ Chatでエラーアラートを送信（運用向け）
+                if not karte_url and order_id and not job_id:
+                    patient_name = karte_data.get("patientName", "不明")
+                    logger.error(
+                        f"⚠️ カルテ作成済み・URL取得失敗: {patient_name} / "
+                        f"orderId={order_id} — GAS通知をスキップします"
+                    )
+                    # 運用向けChatアラート
+                    webhook_url = self.config.get("chat_webhook_url", "")
+                    if webhook_url:
+                        try:
+                            from chat_notifier import notify_error
+                            notify_error(
+                                webhook_url,
+                                f"⚠️ カルテ作成済み・URL取得失敗\n"
+                                f"👤 {patient_name}\n"
+                                f"📋 orderId: {order_id}\n"
+                                f"💡 HOMISにカルテは作成されていますが、"
+                                f"URLを取得できなかったためChat撮影完了通知は送信されません。\n"
+                                f"🔧 SSのAE列を手動確認してください。"
+                            )
+                        except Exception as e:
+                            logger.warning(f"⚠️ エラーChatアラート送信失敗: {e}")
+                    
+                    # 集団検診の場合はグループ追跡だけ行う（通知はしない）
+                    if is_group and group_id:
+                        self._track_group(group_id)
+                    
+                    # 済へ移動（再処理しない）
+                    self._move_to_processed(file_path, success=True)
+                    return True
+                
                 # GAS連携（既存：レントゲンナビ向け）
                 # ※往診カルテ（job_idあり）はレントゲンナビGASに通知しない
                 if order_id and not job_id:
                     if is_group and group_id:
                         # 集団検診の場合：個別通知はスキップ、グループ追跡のみ
-                        self._notify_gas(order_id, karte_url or "")
+                        self._notify_gas(order_id, karte_url)
                         self._track_group(group_id)
                         logger.info(f"📊 集団検診グループ追跡: {group_id}")
                     else:
                         # 通常オーダーの場合：通常通り通知
-                        self._notify_gas(order_id, karte_url or "")
+                        self._notify_gas(order_id, karte_url)
                 
                 # 往診カルテ用：結果ファイル書き込み（job_idがある場合のみ）
                 if job_id:
