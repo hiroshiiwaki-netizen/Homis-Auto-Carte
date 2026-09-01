@@ -12,6 +12,7 @@ v1.5.0 - カルテ保存「中断」→「完了」に変更 (homis_writer.py変
 v1.6.0 - 24時間稼働: 日次リスタート(0:00)・ハートビートWatchdog・エラー自動復帰 (2026/06/19)
 v2.0.0 - リスタートループ修正・単一インスタンスロック・起動時ハートビート (2026/06/19)
 v2.0.1 - リスタート永続化+5分ウィンドウ・PIDロック解放修正 (2026/06/19)
+v2.1.1 - 心拍を常時更新・停止なら自動再開・Watchdogは監視中以外を再起動 (2026/09/01)
 
 ※バージョン更新ルール:
   - GUIや設定の変更時: 下記 self.root.title() のバージョンも必ず更新すること
@@ -231,7 +232,7 @@ class HomisCardGeneratorGUI:
     
     def __init__(self, root):
         self.root = root
-        self.root.title("Homis自動カルテ生成 v2.1.0")
+        self.root.title("Homis自動カルテ生成 v2.1.1")
         self.root.geometry("580x600")
         
         # 設定読み込み
@@ -258,6 +259,8 @@ class HomisCardGeneratorGUI:
         
         # v2.0.1: 日次リスタートガード（ファイル永続化）
         self._last_restart_date = self._load_last_restart_date()
+        # v2.1.1: 起動直後は starting。自動開始の成否が分かるまで Watchdog は待つ
+        self._startup_phase = True
         
         # UI構築
         self._build_ui()
@@ -277,14 +280,18 @@ class HomisCardGeneratorGUI:
         
         # 起動時の自動開始チェック（タスクトレイ格納後に実行）
         self.root.after(800, self._auto_start_check)
+        # v2.1.1: 監視が止まっていたら自動で開始し直す
+        self.root.after(150000, self._ensure_monitoring)
         
-        # v2.0.0: 起動直後にハートビートを書く（Watchdogが「死んだ」と誤判定しないよう）
-        self._write_heartbeat("starting")
+        # v2.1.1: 起動直後から心拍を回す（監視中でなくても Watchdog が状態を見られる）
+        self._start_heartbeat()
     
     def _auto_start_check(self):
         """起動時に設定をチェックして自動的にフォルダ監視を開始"""
         if not self.config.get("auto_start", False):
+            self._startup_phase = False
             self._add_log("自動起動: 無効（手動で開始してください）")
+            self._write_heartbeat(self._heartbeat_status())
             return
         
         # 監視フォルダの存在チェック（Google Drive同期待ち対応）
@@ -306,9 +313,11 @@ class HomisCardGeneratorGUI:
             return
         
         if retry_count >= max_retries:
+            self._startup_phase = False
             self._add_log(f"⚠️ 監視フォルダが{max_retries * 5}秒経っても見つかりません", "WARNING")
             self._add_log(f"  フォルダ: {watch_folder}", "WARNING")
-            self._add_log("手動で開始してください")
+            self._add_log("監視が始まっていないため、Watchdogが再起動します")
+            self._write_heartbeat(self._heartbeat_status())
             return
         
         self._add_log(f"⏳ 待機中... ({(retry_count + 1) * 5}秒/{max_retries * 5}秒)")
@@ -320,15 +329,28 @@ class HomisCardGeneratorGUI:
         # 設定のバリデーション
         errors = self._validate_config()
         if errors:
+            self._startup_phase = False
             self._add_log("⚠️ 設定に問題があるため自動起動できません:", "WARNING")
             for err in errors:
                 self._add_log(f"  ❌ {err}", "ERROR")
-            self._add_log("設定を修正して手動で開始してください")
+            self._add_log("監視が始まっていないため、Watchdogが再起動します")
+            self._write_heartbeat(self._heartbeat_status())
             return
         
         # 設定OK → 自動開始
         self._add_log("✅ 設定確認OK → 自動的にフォルダ監視を開始します", "SUCCESS")
         self._start_watcher()
+        self._startup_phase = False
+        self._write_heartbeat(self._heartbeat_status())
+
+    def _ensure_monitoring(self):
+        """v2.1.1: 自動開始ONなのに停止中なら、開始し直す"""
+        try:
+            if self.config.get("auto_start", False) and (not self.is_running) and (not self._startup_phase):
+                self._add_log("監視が止まっているため自動で開始します", "WARNING")
+                self._do_auto_start()
+        finally:
+            self.root.after(120000, self._ensure_monitoring)
     
     def _validate_config(self) -> list:
         """設定ファイルのバリデーション（エラーのリストを返す。空ならOK）"""
@@ -833,18 +855,24 @@ class HomisCardGeneratorGUI:
         except Exception as e:
             logger.warning(f"リスタート日保存失敗: {e}")
     
+    def _heartbeat_status(self):
+        """Watchdogが見る状態。running だけが正常。"""
+        if self.is_running:
+            return "running"
+        if getattr(self, "_startup_phase", False):
+            return "starting"
+        return "stopped"
+
     def _start_heartbeat(self):
-        """v1.6.0: ハートビートファイルを60秒ごとに更新（Watchdog用）"""
-        self._write_heartbeat("running")
-        # 60秒後に再度書き込み
+        """v2.1.1: 監視中でなくても60秒ごとに心拍を更新する"""
+        self._write_heartbeat(self._heartbeat_status())
+        if self._heartbeat_timer_id:
+            return
         self._heartbeat_timer_id = self.root.after(60000, self._heartbeat_tick)
     
     def _heartbeat_tick(self):
-        """v1.6.0: ハートビート定期更新"""
-        if not self.is_running:
-            self._write_heartbeat("stopped")
-            return
-        self._write_heartbeat("running")
+        """v2.1.1: 停止中も心拍を止めない（Watchdogが停止を検知するため）"""
+        self._write_heartbeat(self._heartbeat_status())
         self._heartbeat_timer_id = self.root.after(60000, self._heartbeat_tick)
     
     def _write_heartbeat(self, status: str):
@@ -856,7 +884,7 @@ class HomisCardGeneratorGUI:
                 f.write(json.dumps({
                     "timestamp": datetime.now().isoformat(),
                     "status": status,
-                    "version": "2.1.0",
+                    "version": "2.1.1",
                     "pid": os.getpid()
                 }))
         except Exception as e:
@@ -959,6 +987,7 @@ class HomisCardGeneratorGUI:
         
         self._update_status()
         self._add_log("フォルダ監視を停止しました", "WARNING")
+        self._write_heartbeat(self._heartbeat_status())
 
 
 def _acquire_instance_lock():
