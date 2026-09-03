@@ -287,6 +287,7 @@ class FolderWatcher:
                 logger.error(f"❌ 処理失敗: {file_path.name}")
                 
                 # 失敗時もGAS連携（空のURLで通知）
+                # 撮影完了の事実は必ず伝える。ナビ側が患者詳細URLで通知する
                 # ※往診カルテ（job_idあり）はレントゲンナビGASに通知しない
                 if order_id and not job_id:
                     self._notify_gas(order_id, "")

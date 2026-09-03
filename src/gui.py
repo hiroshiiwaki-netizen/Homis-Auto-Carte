@@ -13,6 +13,7 @@ v1.6.0 - 24時間稼働: 日次リスタート(0:00)・ハートビートWatchdo
 v2.0.0 - リスタートループ修正・単一インスタンスロック・起動時ハートビート (2026/06/19)
 v2.0.1 - リスタート永続化+5分ウィンドウ・PIDロック解放修正 (2026/06/19)
 v2.1.1 - 心拍を常時更新・停止なら自動再開・Watchdogは監視中以外を再起動 (2026/09/01)
+v2.1.2 - Watchdogを英語BOMなしに戻す・起動失敗をstartup_error.logへ (2026/09/03)
 
 ※バージョン更新ルール:
   - GUIや設定の変更時: 下記 self.root.title() のバージョンも必ず更新すること
@@ -232,7 +233,7 @@ class HomisCardGeneratorGUI:
     
     def __init__(self, root):
         self.root = root
-        self.root.title("Homis自動カルテ生成 v2.1.1")
+        self.root.title("Homis自動カルテ生成 v2.1.2")
         self.root.geometry("580x600")
         
         # 設定読み込み
@@ -884,7 +885,7 @@ class HomisCardGeneratorGUI:
                 f.write(json.dumps({
                     "timestamp": datetime.now().isoformat(),
                     "status": status,
-                    "version": "2.1.1",
+                    "version": "2.1.2",
                     "pid": os.getpid()
                 }))
         except Exception as e:
@@ -1033,8 +1034,25 @@ def _release_instance_lock():
         pass
 
 
+def _install_crash_log():
+    """起動失敗を C:\\HomisKarteWriter\\startup_error.log に残す"""
+    def _hook(exc_type, exc, tb):
+        try:
+            from paths import STATE_DIR
+            path = STATE_DIR / "startup_error.log"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(datetime.now().isoformat() + "\n")
+                f.write("".join(__import__("traceback").format_exception(exc_type, exc, tb)))
+        except Exception:
+            pass
+        sys.__excepthook__(exc_type, exc, tb)
+    sys.excepthook = _hook
+
+
 def main():
     """メイン関数"""
+    _install_crash_log()
     # v2.0.1: 単一インスタンスチェック
     if not _acquire_instance_lock():
         print("別のインスタンスが既に稼働中です。終了します。")
