@@ -1,8 +1,52 @@
 # Homis自動カルテ生成 引継ぎ書
 
-> **最終更新**: 2026-09-03 17:30
-> **バージョン**: v2.1.2
-> **ステータス**: 🟢 失敗時も撮影完了通知（空URL）。翌朝 Chrome 切断を確認
+> **最終更新**: 2026-09-04 10:50
+> **バージョン**: v2.1.2（本番垂水） / v3 クラウド試験成功・ナビ未切替
+> **ステータス**: 🟢 東京 Cloud Run からテスト舞子へ書けた。**来週実装**（詳細ログ先行）
+
+---
+
+## 🧪 v3 GCP試験（2026-09-04）※今日はここまで
+
+Cloud Run Job から、レントゲンナビと同じ JSON 形でテスト舞子（2277808）に1件書けた。岩城さん目視で S/AP・時刻・指示医「山口 高秀 // 内科」まで入っていた。
+
+| 項目 | 値 |
+|---|---|
+| オーダー | `GCP-TEST-20260904-104419` |
+| karte_id | `18302640` |
+| URL | https://homis.jp/homic/?pid=patient_detail&patient_id=2277808&karte_id=18302640 |
+| 所要 | 約45秒 |
+| 仕様 | `docs/SPEC_v3_cloud.md` |
+
+本番の垂水 Python（v2.1.2）は**止めていない**。ナビ切替もしていない。
+
+### 来週やること（岩城さん 2026-09-04）
+
+1. **先に詳細ログ**（しばらく成功/失敗が取れるようにする）
+   - 各 YAML ステップ（Chrome起動・ログイン・新規・外来・指示医・医科カルテ・日時・S・AP・指導・完了・karte_id取得）を `ok/fail` と秒数で出す
+   - 1件の締めは1行: `RESULT {orderId, success, has_karte_id, error_type, total_sec, karte_id}`
+   - Cloud Logging で件数集計できること
+   - **出さない**: 患者名、S/AP本文、パスワード。`config.json` はコンテナに入れない
+   - 文字化け対策: `PYTHONIOENCODING=utf-8`（今日のログは日本語が `????` になった）
+2. そのあとナビ切替（`HOMIS_WRITE_MODE=3`）と結果シート。切替までは垂水 Python を正とする
+
+### GCP設定（プロジェクト `gen-lang-client-0979357970` / 東京）
+
+| 種類 | 名前 |
+|---|---|
+| Secret Manager | `homis-karte-user` / `homis-karte-password`（東京のみ複製） |
+| Artifact Registry | `homis-karte-writer`（Cloud Build SA と Compute SA に writer） |
+| イメージ | `asia-northeast1-docker.pkg.dev/gen-lang-client-0979357970/homis-karte-writer/homis-karte-writer-test:v0` |
+| Cloud Run Job | `homis-karte-writer-test`（4Gi / 2CPU / 5分 / 再試行0） |
+| ビルド置き場 | リポジトリ `cloud/` ＋作業コピー `C:\HomisKarteCloud` |
+
+**ハマり**: このプロジェクトはプロジェクト単位 IAM が狭い。`gcloud run deploy --source` と `cloud-run-source-deploy` への push は拒否される。`dx-web` と同じく **専用リポジトリへ `gcloud builds submit --tag` → Job は `--image`**。
+
+再実行（来週・テスト舞子のみ）:
+
+```
+gcloud run jobs execute homis-karte-writer-test --region=asia-northeast1 --project=gen-lang-client-0979357970 --wait
+```
 
 ---
 
@@ -242,6 +286,8 @@
 
 ```
 Homis自動カルテ生成/
+├── cloud/                  # v3 Cloud Run 試験（Dockerfile / write_once.py）
+├── docs/SPEC_v3_cloud.md   # v3 仕様
 ├── src/
 │   ├── gui.py              # GUIメイン（自動起動・トレイ格納・通知）
 │   ├── watcher.py          # フォルダ監視（二重検知防止済み）
