@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 
 from selenium import webdriver
@@ -97,13 +98,25 @@ def main():
         {"homis_user": user, "homis_password": password, "test_mode": False},
         headless=True,
     )
+    t0 = time.time()
     result = engine.execute("xray_karte", data)
     karte_url = result.get("karte_url") or ""
+    from shared_log import extract_karte_id, infer_error_type, log_result
+    kid = extract_karte_id(karte_url)
+    log_result(
+        order_id,
+        bool(result.get("success")),
+        kid,
+        infer_error_type(result),
+        time.time() - t0,
+    )
     out = {
+        "orderId": order_id,
         "success": bool(result.get("success")),
-        "order_id": order_id,
+        "has_karte_id": bool(kid),
+        "error_type": infer_error_type(result),
+        "karte_id": kid,
         "karte_url": karte_url,
-        "has_karte_id": "karte_id=" in karte_url,
     }
     print("RESULT " + json.dumps(out, ensure_ascii=False))
     return 0 if out["success"] and out["has_karte_id"] else 1

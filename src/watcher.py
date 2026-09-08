@@ -32,6 +32,7 @@ MODULE_VERSION_DATE = "2026-01-26"
 # パス設定（paths.py で一元管理）
 # ============================================================
 from paths import CODE_DIR, STATE_DIR, LOG_DIR, CONFIG_FILE
+from shared_log import DailyAppendHandler, extract_karte_id, infer_error_type, log_result
 
 SRC_DIR = CODE_DIR  # 後方互換
 
@@ -43,10 +44,7 @@ logging.basicConfig(
     format='%(asctime)s [%(levelname)s] %(message)s',
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler(
-            LOG_DIR / f"watcher_{datetime.now().strftime('%Y%m%d')}.log",
-            encoding="utf-8"
-        )
+        DailyAppendHandler("watcher"),
     ]
 )
 logger = logging.getLogger(__name__)
@@ -205,11 +203,23 @@ class FolderWatcher:
             group_id = data.get("groupId", "")
             
             # Homis書き込み
+            write_t0 = time.time()
             result = self._write_to_homis(data)
             
             # orderIdはdata.data内にある
             karte_data = data.get("data", {})
             order_id = karte_data.get("orderId", "")
+            try:
+                kid = extract_karte_id(result.get("karte_url") or "")
+                log_result(
+                    order_id,
+                    bool(result.get("success")),
+                    kid,
+                    infer_error_type(result),
+                    time.time() - write_t0,
+                )
+            except Exception:
+                pass
             
             # job_idはdata直下にある（往診カルテの場合のみ存在）
             job_id = data.get("job_id", "")
@@ -383,7 +393,7 @@ class FolderWatcher:
         
         if not homis_id:
             logger.error("Homis患者IDが指定されていません")
-            return {"success": False, "karte_url": None}
+            return {"success": False, "karte_url": None, "error_type": "step:no_homis_id"}
         
         # テンプレート指定がある場合はテンプレートエンジンを使用
         if template_name:
@@ -398,7 +408,7 @@ class FolderWatcher:
                 logger.error(f"テンプレートエンジンエラー: {e}")
                 import traceback
                 traceback.print_exc()
-                return {"success": False, "karte_url": None}
+                return {"success": False, "karte_url": None, "error_type": "step:template"}
         
         # 従来のhomis_writerを使用（後方互換性）
         logger.info("📋 従来方式（homis_writer）を使用")

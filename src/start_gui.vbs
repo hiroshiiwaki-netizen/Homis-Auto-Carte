@@ -32,5 +32,6 @@ If Not fso.FileExists(launcher) Then
     WScript.Quit 1
 End If
 
+objShell.Environment("Process")("PYTHONIOENCODING") = "utf-8"
 cmd = """" & pyw & """ """ & launcher & """"
 objShell.Run cmd, 0, False

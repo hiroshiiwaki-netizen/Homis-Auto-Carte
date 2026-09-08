@@ -8,9 +8,9 @@ v2.0.2 - 新規作成 (2026/06/19)
 
 パス設計:
   - CODE_DIR: コードの場所（共有ドライブ）= Path(__file__).parent
-  - STATE_DIR: 状態ファイルの場所（ローカル C:\HomisKarteWriter）
+  - STATE_DIR: 状態ファイルの場所（ローカル C:\\HomisKarteWriter）
     heartbeat.txt, homis_writer.pid, last_restart.txt, watchdog.log
-  - LOG_DIR: ログの場所 = CODE_DIR / "logs"（共有ドライブ）
+  - LOG_DIR: 人が読むログ = HomisKarteWriter\\logs（コード配置先に依存しない）
   - CONFIG_FILE: 設定ファイル = STATE_DIR / "config.json"（ローカル）
     ※ ローカルの config.json を正として読む
 
@@ -32,8 +32,12 @@ if _LOCAL_STATE.exists():
 else:
     STATE_DIR = CODE_DIR
 
-# ログの場所（コードと同じ場所 = 共有ドライブ）
-LOG_DIR = CODE_DIR / "logs"
+# 人が読むログは名前どおり HomisKarteWriter\\logs（転記フォルダで動いてもここへ）
+_SHARED_LOG = Path(r"G:\共有ドライブ\レントゲンオーダー\HomisKarteWriter\logs")
+if _SHARED_LOG.parent.exists():
+    LOG_DIR = _SHARED_LOG
+else:
+    LOG_DIR = CODE_DIR / "logs"
 LOG_DIR.mkdir(exist_ok=True)
 
 # 設定ファイル（ローカル優先、なければ共有ドライブ）

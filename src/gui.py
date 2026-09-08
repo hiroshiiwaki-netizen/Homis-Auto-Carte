@@ -14,6 +14,7 @@ v2.0.0 - リスタートループ修正・単一インスタンスロック・�
 v2.0.1 - リスタート永続化+5分ウィンドウ・PIDロック解放修正 (2026/06/19)
 v2.1.1 - 心拍を常時更新・停止なら自動再開・Watchdogは監視中以外を再起動 (2026/09/01)
 v2.1.2 - Watchdogを英語BOMなしに戻す・起動失敗をstartup_error.logへ (2026/09/03)
+v2.1.3 - 詳細ログを共有 HomisKarteWriter\\logs へ（STEP/RESULT・心拍コピー） (2026/09/07)
 
 ※バージョン更新ルール:
   - GUIや設定の変更時: 下記 self.root.title() のバージョンも必ず更新すること
@@ -48,6 +49,7 @@ from chat_notifier import notify_startup, notify_shutdown, notify_error
 
 # v2.0.2: パス一元管理
 from paths import STATE_DIR, HEARTBEAT_FILE, PID_FILE, LAST_RESTART_FILE
+from shared_log import append_named, ensure_local_share_link, write_shared_heartbeat
 
 # ロガー設定
 logger = logging.getLogger(__name__)
@@ -233,11 +235,12 @@ class HomisCardGeneratorGUI:
     
     def __init__(self, root):
         self.root = root
-        self.root.title("Homis自動カルテ生成 v2.1.2")
+        self.root.title("Homis自動カルテ生成 v2.1.3")
         self.root.geometry("580x600")
         
         # 設定読み込み
         self.config = load_config()
+        ensure_local_share_link()
         
         # フォルダ監視スレッド
         self.watcher = None
@@ -880,14 +883,15 @@ class HomisCardGeneratorGUI:
         """v2.0.2: ハートビートファイルを書き込む（paths.py一元管理）"""
         try:
             import json
-            heartbeat_path = HEARTBEAT_FILE
-            with open(heartbeat_path, "w", encoding="utf-8") as f:
-                f.write(json.dumps({
-                    "timestamp": datetime.now().isoformat(),
-                    "status": status,
-                    "version": "2.1.2",
-                    "pid": os.getpid()
-                }))
+            payload = json.dumps({
+                "timestamp": datetime.now().isoformat(),
+                "status": status,
+                "version": "2.1.3",
+                "pid": os.getpid()
+            })
+            with open(HEARTBEAT_FILE, "w", encoding="utf-8") as f:
+                f.write(payload)
+            write_shared_heartbeat(payload)
         except Exception as e:
             logger.warning(f"ハートビート書き込み失敗: {e}")
     
@@ -1035,15 +1039,20 @@ def _release_instance_lock():
 
 
 def _install_crash_log():
-    """起動失敗を C:\\HomisKarteWriter\\startup_error.log に残す"""
+    """起動失敗を C:\\ と共有 logs の両方に残す"""
     def _hook(exc_type, exc, tb):
+        text = datetime.now().isoformat() + "\n" + "".join(
+            __import__("traceback").format_exception(exc_type, exc, tb)
+        )
         try:
-            from paths import STATE_DIR
             path = STATE_DIR / "startup_error.log"
             path.parent.mkdir(parents=True, exist_ok=True)
             with open(path, "a", encoding="utf-8") as f:
-                f.write(datetime.now().isoformat() + "\n")
-                f.write("".join(__import__("traceback").format_exception(exc_type, exc, tb)))
+                f.write(text)
+        except Exception:
+            pass
+        try:
+            append_named("startup_error.log", text)
         except Exception:
             pass
         sys.__excepthook__(exc_type, exc, tb)

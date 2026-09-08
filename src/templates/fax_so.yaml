@@ -1,0 +1,78 @@
+# つくし FAX カルテ（S/O・電話再診）
+# 仕様: docs/SPEC_v3_cloud.md §11
+# 失敗・二重防止は §7 / 2b。このファイルは手順だけ。
+
+name: つくしS/Oカルテ
+description: つくし確認後のカルテ作成（電話再診・SとO）
+version: "1.0"
+
+target_url: "https://homis.jp/homic/?pid=patient_detail&patient_id={homisId}&p=5"
+
+auth:
+  type: homis
+  detect_login: true
+
+steps:
+  - name: 新規ボタンをクリック
+    action: click
+    selector: "#karteNew"
+    wait_after: 2000
+
+  - name: 電話再診を選択
+    action: click
+    selector: "label"
+    text_contains: "電話再診"
+    wait_after: 1000
+
+  - name: 医科カルテボタンをクリック
+    action: click
+    selector_type: xpath
+    selector: "//a[contains(text(), '医科カルテ')]"
+    wait_after: 3000
+
+  - name: S欄に入力
+    action: js_input
+    selector: "textarea#subjective"
+    value: "{sContent}"
+    wait_after: 2000
+
+  - name: O欄に入力
+    action: js_input
+    selector: "textarea#objective"
+    value: "{oContent}"
+    wait_after: 2000
+
+  - name: A/Pに全角スペースを入力
+    action: js_input
+    selector: "textarea#ap"
+    value: "\u3000"
+    wait_after: 500
+
+  - name: 本日A/Pに全角スペースを入力
+    action: js_input
+    selector: "textarea#ap_today"
+    value: "\u3000"
+    wait_after: 500
+
+  - name: 指導内容に全角スペースを入力
+    action: js_input
+    selector: "textarea#report"
+    value: "\u3000"
+    wait_after: 1000
+
+  - name: 完了ボタンで保存
+    action: click
+    selector: "#karteCompletion"
+    confirm_alert_count: 2
+    wait_after: 5000
+
+on_complete:
+  - name: リンクをコピー
+    action: click
+    selector_type: xpath
+    selector: "//a[contains(@onclick, 'copyLinkOfKarte')]"
+    wait_after: 1000
+
+result:
+  type: clipboard
+  description: カルテURL

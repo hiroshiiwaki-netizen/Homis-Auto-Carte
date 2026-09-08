@@ -1,0 +1,78 @@
+# おひさまボット（Sのみ・電話再診・中断）
+# 仕様: docs/SPEC_v3_cloud.md §12
+# 失敗・二重防止は §7 / 2b。このファイルは手順だけ。
+
+name: おひさまボットS中断
+description: おひさまボット確認後のカルテ（電話再診・Sのみ・中断）
+version: "1.0"
+
+target_url: "https://homis.jp/homic/?pid=patient_detail&patient_id={homisId}&p=5"
+
+auth:
+  type: homis
+  detect_login: true
+
+steps:
+  - name: 新規ボタンをクリック
+    action: click
+    selector: "#karteNew"
+    wait_after: 2000
+
+  - name: 電話再診を選択
+    action: click
+    selector: "label"
+    text_contains: "電話再診"
+    wait_after: 1000
+
+  - name: 医科カルテボタンをクリック
+    action: click
+    selector_type: xpath
+    selector: "//a[contains(text(), '医科カルテ')]"
+    wait_after: 3000
+
+  - name: S欄に入力
+    action: js_input
+    selector: "textarea#subjective"
+    value: "{sContent}"
+    wait_after: 2000
+
+  - name: O欄に半角スペースを入力
+    action: js_input
+    selector: "textarea#objective"
+    value: "\u0020"
+    wait_after: 500
+
+  - name: A/Pに半角スペースを入力
+    action: js_input
+    selector: "textarea#ap"
+    value: "\u0020"
+    wait_after: 500
+
+  - name: 本日A/Pに半角スペースを入力
+    action: js_input
+    selector: "textarea#ap_today"
+    value: "\u0020"
+    wait_after: 500
+
+  - name: 指導内容に半角スペースを入力
+    action: js_input
+    selector: "textarea#report"
+    value: "\u0020"
+    wait_after: 1000
+
+  - name: 中断ボタンで保存
+    action: click
+    selector: "#karteInterruption"
+    confirm_alert_count: 2
+    wait_after: 5000
+
+on_complete:
+  - name: リンクをコピー
+    action: click
+    selector_type: xpath
+    selector: "//a[contains(@onclick, 'copyLinkOfKarte')]"
+    wait_after: 1000
+
+result:
+  type: clipboard
+  description: カルテURL

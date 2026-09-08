@@ -7,10 +7,13 @@ YAMLテンプレートを読み込み、ブラウザ操作を実行
 v1.0.0 - 初版 (2026/01/26)
 """
 
+import time
 import yaml
 import logging
 from pathlib import Path
 from typing import Dict, Any, Optional
+
+from shared_log import timed_step
 
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
@@ -147,16 +150,24 @@ class TemplateEngine:
         Returns:
             dict: {"success": bool, "karte_url": str or None}
         """
-        result = {"success": False, "karte_url": None}
+        result = {"success": False, "karte_url": None, "error_type": ""}
+        first_fail = ""
         
         try:
             # テンプレート読み込み
             template = self.load_template(template_name)
             if not template:
+                result["error_type"] = "step:template"
                 return result
             
-            # ドライバー初期化
-            self._init_driver()
+            try:
+                with timed_step("Chrome起動") as st:
+                    self._init_driver()
+                    st.ok = True
+            except Exception as e:
+                logger.error(f"Chrome起動失敗: {e}")
+                result["error_type"] = "chrome"
+                return result
             
             # 対象URLに移動
             target_url = template.get("target_url", "")
@@ -165,23 +176,28 @@ class TemplateEngine:
             
             logger.info(f"ページに移動: {target_url}")
             self.driver.get(target_url)
-            
-            import time
             time.sleep(3)
             
             # ログイン処理
             auth_config = template.get("auth", {})
             if auth_config:
-                if not self._do_login(auth_config, target_url):
-                    logger.error("ログイン失敗")
-                    return result
+                with timed_step("ログイン") as st:
+                    if not self._do_login(auth_config, target_url):
+                        logger.error("ログイン失敗")
+                        result["error_type"] = "login"
+                        return result
+                    st.ok = True
             
             # ステップを実行
-            steps = template.get("steps", [])
-            for step in steps:
-                if not self.actions.execute_action(step, data):
-                    logger.error(f"ステップ失敗: {step.get('name', 'unknown')}")
-                    # 失敗しても続行（エラー耐性）
+            for step in template.get("steps", []):
+                name = step.get("name", "unknown")
+                with timed_step(name) as st:
+                    if self.actions.execute_action(step, data):
+                        st.ok = True
+                    else:
+                        logger.error(f"ステップ失敗: {name}")
+                        if not first_fail:
+                            first_fail = name
             
             # 完了後処理
             on_complete = template.get("on_complete", [])
@@ -194,7 +210,10 @@ class TemplateEngine:
                 clear_clipboard()
             
             for action in on_complete:
-                self.actions.execute_action(action, data)
+                name = action.get("name", "on_complete")
+                with timed_step(name) as st:
+                    if self.actions.execute_action(action, data):
+                        st.ok = True
             
             # OKボタンがあれば押す（アラート処理）
             try:
@@ -210,20 +229,28 @@ class TemplateEngine:
             result_config = template.get("result", {})
             if result_config.get("type") == "clipboard":
                 time.sleep(0.5)
-                try:
-                    # v2.0.4: リトライ付きURL取得（3回・3秒間隔）
-                    from clipboard_utils import extract_karte_url_with_retry
-                    result["karte_url"] = extract_karte_url_with_retry(self.driver)
-                    if result["karte_url"] and "karte_id" in result["karte_url"]:
-                        logger.info(f"カルテURL: {result['karte_url']}")
-                    elif result["karte_url"]:
-                        logger.warning(f"カルテURL（karte_idなし）: {result['karte_url']}")
-                    else:
-                        logger.warning("カルテURL取得失敗")
-                except Exception as e:
-                    logger.warning(f"カルテURL取得エラー: {e}")
+                with timed_step("karte_id取得") as st:
+                    try:
+                        # v2.0.4: リトライ付きURL取得（3回・3秒間隔）
+                        from clipboard_utils import extract_karte_url_with_retry
+                        result["karte_url"] = extract_karte_url_with_retry(self.driver)
+                        if result["karte_url"] and "karte_id" in result["karte_url"]:
+                            logger.info(f"カルテURL: {result['karte_url']}")
+                            st.ok = True
+                        elif result["karte_url"]:
+                            logger.warning(f"カルテURL（karte_idなし）: {result['karte_url']}")
+                        else:
+                            logger.warning("カルテURL取得失敗")
+                    except Exception as e:
+                        logger.warning(f"カルテURL取得エラー: {e}")
             
             result["success"] = True
+            if first_fail:
+                result["error_type"] = f"step:{first_fail}"
+            elif result["success"] and not (
+                result.get("karte_url") and "karte_id" in (result.get("karte_url") or "")
+            ):
+                result["error_type"] = "no_karte_id"
             logger.info("✅ テンプレート実行成功")
             
             # テストモード時: 同じブラウザの新しいタブでURLを開く
@@ -233,14 +260,21 @@ class TemplateEngine:
                 # 新しいタブを開いてURLに移動
                 self.driver.execute_script(f"window.open('{result['karte_url']}', '_blank');")
                 time.sleep(2)  # 新しいタブの読み込みを待つ
-            
+        
         except Exception as e:
             logger.error(f"❌ テンプレート実行エラー: {e}")
             import traceback
             traceback.print_exc()
+            err = str(e).lower()
+            if not result.get("error_type"):
+                if "invalid session" in err or "chrome" in err or "webdriver" in err:
+                    result["error_type"] = "chrome"
+                elif "timeout" in err or "timed out" in err:
+                    result["error_type"] = "timeout"
+                elif first_fail:
+                    result["error_type"] = f"step:{first_fail}"
         
         finally:
-            import time
             test_mode = self.config.get("test_mode", False)
             if test_mode:
                 # テストモード: ブラウザを閉じずにそのまま（ユーザーが確認できるように）

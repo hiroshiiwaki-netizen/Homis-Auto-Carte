@@ -1,12 +1,198 @@
 # Homis自動カルテ生成 引継ぎ書
 
-> **最終更新**: 2026-09-04 10:50
-> **バージョン**: v2.1.2（本番垂水） / v3 クラウド試験成功・ナビ未切替
-> **ステータス**: 🟢 東京 Cloud Run からテスト舞子へ書けた。**来週実装**（詳細ログ先行）
+> **最終更新**: 2026-09-08 16:45
+> **バージョン**: v2.1.3 GUI / Watchdog v2.1.4 / Cloud Run `:v5` / 仕様 v0.19
+> **ステータス**: 🟢 別患者3同時OK。上限は50で考える（蓋はまだ3）。**明日: 垂水デスクトップ確認**。ナビ未切替
 
 ---
 
-## 🧪 v3 GCP試験（2026-09-04）※今日はここまで
+## 📌 C1 置き場所（2026-09-07 岩城さん）
+
+レントゲンカルテの画面操作は **GCP（Cloud Run・東京）** に置く。おひさまサーバー案は不採用（Chrome切れが残る）。HomisApi・つくしブラウザは使わない（既存の決めごと）。
+
+切替までは垂水 Python が正。ナビの `HOMIS_WRITE_MODE=3` は「進めて」があってから。この決定だけでは Chrome を止めない。
+
+---
+
+## 📝 v2.1.3 詳細ログを共有へ（2026-09-07）
+
+岩城さん指示: 成功/失敗をステップ単位で残す。人が読むログは全部 `HomisKarteWriter\logs`。フォルダ統合はしない。`config.json` は共有に置かない。
+
+| 出す | 出さない |
+|---|---|
+| `STEP 名前 ok/fail 秒` | 患者名 |
+| `RESULT {orderId, success, has_karte_id, error_type, total_sec, karte_id}` | S/AP本文・パスワード |
+
+- 置き場: `G:\共有ドライブ\レントゲンオーダー\HomisKarteWriter\logs\`
+  - `writer_YYYYMMDD.log` … STEP / RESULT
+  - `watcher_YYYYMMDD.log` … 従来ログ（書いた日で切る。1行ごとに開いて閉じる）
+  - `watchdog.log` / `heartbeat.txt` / `startup_error.log` … 閲覧用コピー
+- Watchdog 判定の心拍は **`C:\HomisKarteWriter\heartbeat.txt` のまま**（Drive遅延で誤再起動しない）
+- Watchdog.bat は ASCII のまま。共有へは `C:\HomisKarteWriter\shared_logs` ジャンクション経由
+- 本番 CODE_DIR はこれまでどおり **Homis転記実行ファイル**。コードは両フォルダへ同じ版を置いた
+- `config.json` は上書きしていない
+- **C:\HomisKarteWriter のプログラムも最新にする**（2026-09-08 岩城さん。以前「設定だけ」と止めたのは誤り。2月の watcher 等が残っていた）。設定・心拍・ログは触らない。共有の `update_c_drive.bat` を垂水で1回実行
+
+**垂水で効かせるには:** アプリを終了 → タスクの Watchdog が `start_gui.vbs` で再起動。トレイタイトルが **v2.1.3** なら新版。
+
+---
+
+## 🧪 v3 フェーズ2a 受け口（2026-09-08）※ナビ未切替
+
+Cloud Run **サービス** `homis-karte-writer` を東京に出した。GAS は繋いでいない。
+
+| 項目 | 値 |
+|---|---|
+| URL | `https://homis-karte-writer-dryyncl3ga-an.a.run.app` |
+| イメージ | `.../homis-karte-writer/homis-karte-writer:v1` |
+| 資源 | 4Gi / 2CPU / timeout 300 / concurrency 1 / max-instances 3 / min-instances 0 |
+| 合言葉 Secret | `homis-writer-key`（値は書かない） |
+| GET `/health` | 200 `{"ok":true,"service":"homis-karte-writer"}` |
+| POST `/write` 合言葉なし／誤り | 401 |
+| 書き込み | `GCP-TEST-20260908-133908` / karte_id=`18323699` / 47.4秒 |
+| カルテ | https://homis.jp/homic/?pid=patient_detail&patient_id=2277808&karte_id=18323699 |
+
+ビルド時: Dockerfile の `COPY write_once.py server.py .` は Cloud Build で失敗。`./` に直した。
+
+### 失敗の共通ルール（2026-09-08・仕様 v0.7）
+
+正本は `docs/SPEC_v3_cloud.md` §7。レントゲンもつくしも同じ。
+
+- 新規より前だけ、中で1回やり直す。`#karteNew` のあと（`karte_opened`）は禁止
+- 外からの再送は `orderId`（2b）。旗だけでは応答なし再送を止められない
+- レントゲンの通常 Chat は従来どおり（失敗しても送る）
+- 空カルテ疑いは現場に「新規しない」。**現場は消さない**。そのときだけ DX エラー Chat を追加
+- DX 文面（固定）: 「レントゲンナビでカルテを空で作成した可能性があるので、確認して空なら削除してください。」＋ **患者URL必須**
+- DX の Incoming Webhook は Secret に置く。URL は引継書に書かない（2026-09-08 岩城さんから受領）
+
+### §7 実装（2026-09-08・コード）
+
+`cloud/server.py` のみ（垂水の template_engine は未変更）。
+
+- `#karteNew` 成功で `karte_opened`。新規後は中でやり直さない
+- 新規前の chrome/login/timeout だけ 1 回
+- 空カルテ疑い（新規後・karte_id なし・`no_karte_id` 以外）→ DX 固定文＋患者URL
+- 環境変数 `DX_EMPTY_KARTE_WEBHOOK`（Secret。値は書かない）
+- 空カルテをわざと作る試験はしない
+
+### 2b 試験ブック（2026-09-08・案B）
+
+本番ナビのブックは触っていない。
+
+- ブック: `HOMIS書込結果_試験_CloudRun`  
+  https://docs.google.com/spreadsheets/d/1_K0W0r_1HT7EzZz0QsMVbw6MDL7bVMGRChPI28xRI7w/edit
+- ロボットSA（Compute）に編集権限済み
+- 先に `accepted` 行 → HOMIS → 同じ行を更新。同じ orderId は書かない
+- 環境変数 `RESULT_SPREADSHEET_ID`
+- GAS は未接続
+
+二重防止テスト（2026-09-08 14:49）:
+
+| 回 | HTTP | 所要 | 結果 |
+|---|---|---|---|
+| 1 | 200 | 48.7秒 | karte_id=`18324342`。シート `ok` 1行 |
+| 2 | 409 | 1秒 | HOMIS未ログイン。シートは1行のまま |
+
+オーダー: `GCP-DUP-20260908-144932`  
+カルテ: https://homis.jp/homic/?pid=patient_detail&patient_id=2277808&karte_id=18324342
+
+### fax_so 実装（2026-09-08）
+
+- `src/templates/fax_so.yaml`（電話再診・S/O・空欄は全角スペース）
+- `POST /write` の `template`。未知名は 400。無いときは `xray_karte`
+- 試験: 未知名 400。`FAX-SO-20260908-150917` → 200 / karte_id=`18324540` / 47.1秒
+- カルテ: https://homis.jp/homic/?pid=patient_detail&patient_id=2277808&karte_id=18324540
+- つくし WF は未接続。垂水共有は未更新（クラウドのみ）
+- 目視: 種別「電話」・S/O 一致（岩城さん 2026-09-08）
+- Cloud Run の HOMIS は **おひさまロボット GCP** に差し替え（Secret のみ。PWは書かない）。垂水 `config.json` は未変更
+### bot_s_interrupt 実装（2026-09-08）
+
+- `src/templates/bot_s_interrupt.yaml`（電話再診・Sのみ・中断・半角スペース）
+- 試験: `BOT-INT-20260908-153206` → 200 / karte_id=`18324776` / 43.6秒
+- カルテ: https://homis.jp/homic/?pid=patient_detail&patient_id=2277808&karte_id=18324776
+- 中断でも karte_id は取れた。目視（電話・中断・更新者 GCP）は岩城さん待ち
+- おひさまボット／つくし本番は未接続
+
+### 2件同時試験（2026-09-08 16:13）
+
+`max-instances=2`（concurrency 1 のまま）。同じアカウント・同じテスト舞子へ `bot_s_interrupt` を2本同時。
+
+| 項目 | A | B |
+|---|---|---|
+| orderId | `BOT-DUAL-A-20260908-161323` | `BOT-DUAL-B-20260908-161323` |
+| HTTP | 200 | 200 |
+| 箱の中の秒 | 40.9 | 43.8 |
+| karte_id | `18325155` | **同じ** `18325155` |
+| 壁時計 | 両方合わせて **44.8秒**（1件ずつなら約85秒） | |
+
+箱は2つ（インスタンスIDが違う）。ログイン切れなし。STEP は両方とも最後まで ok。
+
+岩城さん目視: カルテ1枚。Sは「同時書き確認 B」のみ。Aは上書き。
+
+**やっていない:** `max-instances=10`。違う患者同士の同時書き。
+
+カルテB: https://homis.jp/homic/?pid=patient_detail&patient_id=2277808&karte_id=18325155
+
+### 時差確認 C（2026-09-08 16:27）
+
+同じテスト舞子へ、Bのあと時間を空けて1件だけ。
+
+| 項目 | 値 |
+|---|---|
+| orderId | `BOT-GAP-C-20260908-162756` |
+| HTTP | 200 |
+| 秒 | 37.8（壁時計 40.2） |
+| karte_id | **`18325240`**（B の `18325155` とは別） |
+
+同じ患者でも、間を空ければ新しいカルテが立つ。
+
+カルテC: https://homis.jp/homic/?pid=patient_detail&patient_id=2277808&karte_id=18325240
+
+### 3秒おき3件（2026-09-08 16:31）
+
+同時一発ではなく、開始を 0秒 / 3秒 / 6秒。同じテスト舞子。1件が約40秒なので、後ろは前の書き込み中に始まる。
+
+| | D | E | F |
+|---|---|---|---|
+| orderId | `BOT-GAP3-D-20260908-163148` | `BOT-GAP3-E-20260908-163148` | `BOT-GAP3-F-20260908-163148` |
+| HTTP | 200 | 200 | **429 Rate exceeded** |
+| 箱の中の秒 | 39.3 | 40.9 | （書いていない） |
+| karte_id | `18325289` | **同じ** `18325289` | なし |
+
+壁時計 44.9秒。箱の上限が2のため、3件目は待ち行列で弾かれた見込み。同じ患者の3秒差は、同時と同じく1枚に寄る。
+
+カルテ: https://homis.jp/homic/?pid=patient_detail&patient_id=2277808&karte_id=18325289
+
+### 別患者3人同時（2026-09-08 16:39）
+
+許可リストをテスト3人に拡大。箱の上限を3。同じ瞬間に3本。
+
+| 患者 | homisId | orderId | HTTP | karte_id |
+|---|---|---|---|---|
+| テスト舞子 | 2277808 | `BOT-3P-MAIKO-20260908-163917` | 200 | **18325357** |
+| テスト西宮 | 2080376 | `BOT-3P-NISHI-20260908-163917` | 200 | **18325358** |
+| テスト芦屋（あしや） | 2196689 | `BOT-3P-ASHIYA-20260908-163917` | 200 | **18325356** |
+
+壁時計 **46.2秒**（1件ずつなら約2分）。カルテIDは3つとも違う。
+
+- 舞子: https://homis.jp/homic/?pid=patient_detail&patient_id=2277808&karte_id=18325357
+- 西宮: https://homis.jp/homic/?pid=patient_detail&patient_id=2080376&karte_id=18325358
+- 芦屋: https://homis.jp/homic/?pid=patient_detail&patient_id=2196689&karte_id=18325356
+
+### 運用上限（2026-09-08 岩城さん）
+
+同時の上限は **50件** で考える。届かない見込み。いまのサービスは蓋 **3** のまま（50にはしていない。50件試験もしない）。蓋を50にするのは次の指示で。`min-instances=0` は変えない。
+
+### 次にやること
+
+1. **明日（9/9）: 垂水デスクトップの状況確認**（トレイタイトル v2.1.3／監視中／Chrome・心拍。`config.json` は触らない）
+2. 蓋を `max-instances=50` にするかは指示待ち（今日の検証は停止）
+3. つくし／ボット側の JSON 送信は別指示
+4. ナビ切替（`HOMIS_WRITE_MODE=3`）は「進めて」があってから
+
+---
+
+## 🧪 v3 GCP Job試験（2026-09-04）※ナビ未切替
 
 Cloud Run Job から、レントゲンナビと同じ JSON 形でテスト舞子（2277808）に1件書けた。岩城さん目視で S/AP・時刻・指示医「山口 高秀 // 内科」まで入っていた。
 
@@ -18,26 +204,19 @@ Cloud Run Job から、レントゲンナビと同じ JSON 形でテスト舞子
 | 所要 | 約45秒 |
 | 仕様 | `docs/SPEC_v3_cloud.md` |
 
-本番の垂水 Python（v2.1.2）は**止めていない**。ナビ切替もしていない。
-
-### 来週やること（岩城さん 2026-09-04）
-
-1. **先に詳細ログ**（しばらく成功/失敗が取れるようにする）
-   - 各 YAML ステップ（Chrome起動・ログイン・新規・外来・指示医・医科カルテ・日時・S・AP・指導・完了・karte_id取得）を `ok/fail` と秒数で出す
-   - 1件の締めは1行: `RESULT {orderId, success, has_karte_id, error_type, total_sec, karte_id}`
-   - Cloud Logging で件数集計できること
-   - **出さない**: 患者名、S/AP本文、パスワード。`config.json` はコンテナに入れない
-   - 文字化け対策: `PYTHONIOENCODING=utf-8`（今日のログは日本語が `????` になった）
-2. そのあとナビ切替（`HOMIS_WRITE_MODE=3`）と結果シート。切替までは垂水 Python を正とする
+本番の垂水 Python は**止めていない**。ナビ切替もしていない。
 
 ### GCP設定（プロジェクト `gen-lang-client-0979357970` / 東京）
 
 | 種類 | 名前 |
 |---|---|
-| Secret Manager | `homis-karte-user` / `homis-karte-password`（東京のみ複製） |
+| Secret Manager | `homis-karte-user` / `homis-karte-password` / `homis-writer-key`（東京） |
 | Artifact Registry | `homis-karte-writer`（Cloud Build SA と Compute SA に writer） |
-| イメージ | `asia-northeast1-docker.pkg.dev/gen-lang-client-0979357970/homis-karte-writer/homis-karte-writer-test:v0` |
-| Cloud Run Job | `homis-karte-writer-test`（4Gi / 2CPU / 5分 / 再試行0） |
+| サービス | `homis-karte-writer`（受け口 2a。`--no-allow-unauthenticated`） |
+| いまの蓋 | **max-instances=3** / concurrency 1 / min-instances 0。運用上限は **50**（未適用） |
+| 書いてよい患者 | `ALLOWED_HOMIS_IDS=2277808,2080376,2196689`（テスト舞子／西宮／芦屋） |
+| Job（残置） | `homis-karte-writer-test`（4Gi / 2CPU / 5分 / 再試行0） |
+| イメージ | `.../homis-karte-writer/homis-karte-writer:v1`（サービス）／ `...-test:v0`（Job） |
 | ビルド置き場 | リポジトリ `cloud/` ＋作業コピー `C:\HomisKarteCloud` |
 
 **ハマり**: このプロジェクトはプロジェクト単位 IAM が狭い。`gcloud run deploy --source` と `cloud-run-source-deploy` への push は拒否される。`dx-web` と同じく **専用リポジトリへ `gcloud builds submit --tag` → Job は `--image`**。
