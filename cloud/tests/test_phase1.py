@@ -233,6 +233,19 @@ class Phase1(unittest.TestCase):
         self.assertEqual(code, 400)
         self.assertEqual(self.navi.calls, [])
 
+    def test_s11_unexpected_error_in_notify_still_returns_result(self):
+        # 知らせで思わぬ例外が出ても、書いた結果（200）は必ず返る（黒ヤギ 10/15 指摘1）
+        orig = navi_callback.notify_karte
+        navi_callback.notify_karte = lambda *a, **k: (_ for _ in ()).throw(TypeError("boom"))
+        try:
+            self.next_result = {"success": True, "karte_url": "https://h/?karte_id=9", "error_type": ""}
+            code, out = post(self.base + "/write", self.body(oid="GCP-T-EXC"))
+        finally:
+            navi_callback.notify_karte = orig
+        self.assertEqual(code, 200)
+        self.assertEqual(out["navi"]["message"], "TypeError")
+        self.assertTrue(out["success"])
+
     def test_s10_write_still_needs_key(self):
         code, _ = post(self.base + "/write", self.body(), key="wrong-k")
         self.assertEqual(code, 401)

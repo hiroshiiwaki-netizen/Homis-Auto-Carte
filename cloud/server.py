@@ -248,6 +248,10 @@ def write_karte(data: dict) -> dict:
 
 
 class Handler(BaseHTTPRequestHandler):
+    # v3.1.0: 受け取りの読み書きの待ちに上限（送る側が途中で止まっても待ち続けない。黒ヤギ 10/15 指摘3）
+    # HOMIS に書いている時間はここに含まれない（ソケットを読み書きしている間だけの上限）
+    timeout = 60
+
     def log_message(self, fmt, *args):
         logger.info(fmt, *args)
 
@@ -358,7 +362,11 @@ class Handler(BaseHTTPRequestHandler):
         # 同じ注文の2回目（409）と結果シートの失敗（503）は知らせない（1回目が知らせる／書いていない）
         if template == "xray_karte" and code in (200, 500) and navi_callback.enabled():
             url = out.get("karte_url") or ""
-            out["navi"] = navi_callback.notify_karte(order_id, url if "karte_id=" in url else "")
+            try:
+                out["navi"] = navi_callback.notify_karte(order_id, url if "karte_id=" in url else "")
+            except Exception as e:  # 知らせで思わぬ失敗があっても、書いた結果は必ず返す（黒ヤギ 10/15 指摘1）
+                logger.error("ナビへの知らせで予期しない例外 orderId=%s err=%s", order_id, type(e).__name__)
+                out["navi"] = {"delivered": False, "success": False, "attempts": 0, "message": type(e).__name__}
         self._send(code, out)
 
 

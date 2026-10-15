@@ -27,7 +27,7 @@
 
 | 版 | 日付 | 主な変更 | 変えたファイル |
 |---|---|---|---|
-| v3.1.0 | 2026/10/15 | 書き終えたらナビの doPost（updateHomisLink）に知らせる（NAVI_WEBAPP_URL があるときだけ・xray_karte だけ・応答なし／5xx だけ最大3回・だめなら DX Chat）。POST /check-group（集団の確かめ役）。断るときも本文を読み切る。テスト `cloud/tests/test_phase1.py` 16本 | server.py・navi_callback.py（新）・Dockerfile・prepare_cloud_build.ps1 |
+| v3.1.0 | 2026/10/15 | 書き終えたらナビの doPost（updateHomisLink）に知らせる（NAVI_WEBAPP_URL があるときだけ・xray_karte だけ・応答なし／5xx だけ最大3回・だめなら DX Chat）。POST /check-group（集団の確かめ役）。断るときも本文を読み切る。テスト `cloud/tests/test_phase1.py` 17本（黒ヤギ合格・知らせの例外の囲い・受け取りの待ち60秒） | server.py・navi_callback.py（新）・Dockerfile・prepare_cloud_build.ps1 |
 | v3.0.x | 2026/09/04〜09/08 | Job 試験・受け口2a・失敗ガード（7章）・結果シート（2b）・fax_so・bot_s_interrupt（9.5・9.6 章） | server.py・result_sheet.py・write_once.py |
 
 ### 0.3 Cloud Run のデプロイ履歴（`homis-karte-writer`・東京）
