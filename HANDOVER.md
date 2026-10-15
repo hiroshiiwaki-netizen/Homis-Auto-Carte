@@ -2,7 +2,22 @@
 
 > **最終更新**: 2026-10-15 13:18
 > **バージョン**: v2.1.3 GUI / Watchdog v2.1.4 / Cloud Run `:v5` / 仕様 v0.19
-> **ステータス**: 🟢 垂水 Python v2.1.3 が本番。**GCP 移行計画 v0.4 確定（10/15・黒ヤギ3回）→ 岩城さんの「進めて」で今週フェーズ0から**。ナビ未切替
+> **ステータス**: 🟢 本番は垂水 Python v2.1.3。**GCP 移行: フェーズ0（ナビ @89）・フェーズ1（cloud v3.1.0・:v6・Cloud Tasks）完了・通し試験OK（10/15）**。次はフェーズ2（ナビ側）。ナビ未切替
+
+---
+
+## 🚧 2026-10-15 フェーズ0・1 完了（本番はまだ垂水 Python）
+
+| フェーズ | 状態 |
+|---|---|
+| 0 ナビの JSON のファイル名に注文番号 | ✅ ナビ v8.9.4 を本番 @89（10/15 13:54）。次の撮影完了で垂水の watcher ログに新しい名前が出るか確かめる |
+| 1 Cloud Run が書いたらナビに知らせる・Cloud Tasks | ✅ cloud v3.1.0（:v6・リビジョン 00010-gxq・黒ヤギ合格・テスト17本）。Cloud Tasks API 有効化、キュー `homis-karte-writer`（同時1・再試行なし・記録100%）、列専用アカウント `homis-tasks-invoker`（run.invoker だけ）、環境変数 NAVI_WEBAPP_URL＝ナビ本番 |
+| 通し試験 | ✅ GCP-P1-20261015-142550: 列 → Cloud Run → テスト舞子に書けた（50.6秒・karte_id あり）→ ナビへ知らせ（1回で届く。試験用の番号なのでナビは「見つからない」）→ DX Chat 200（わざと） |
+| 【確認】 | 1回目の試験タスク（GCP-P1-20261015-142239・14:22:50）は列から消えたが Cloud Run に届いていない。列の記録を有効にする前で原因不明。フェーズ3 で見張る |
+| 次 | フェーズ2（ナビ側: HomisCloud.gs・通知済みの印・集団のそろい判定・checkGroupComplete・戻す用の関数）。岩城さんの「進めて」から |
+
+- Cloud Run は NAVI_WEBAPP_URL があるので、/write で書くとナビ本番に知らせる。書いてよい患者はテスト3人だけ（ALLOWED_HOMIS_IDS）なので、本番の注文には影響しない
+- タスクの入れ方（試験）: 合言葉は `gcloud secrets versions access latest --secret=homis-writer-key` を変数に入れて画面に出さない。`gcloud tasks create-http-task <orderId> --queue=homis-karte-writer --location=asia-northeast1 --url=<サービスURL>/write --method=POST --header=Content-Type:application/json --header=X-Writer-Key:<変数> --body-file=<JSON> --oidc-service-account-email=homis-tasks-invoker@gen-lang-client-0979357970.iam.gserviceaccount.com --oidc-token-audience=<サービスURL>`
 
 ---
 

@@ -32,8 +32,12 @@
 
 ### 0.3 Cloud Run のデプロイ履歴（`homis-karte-writer`・東京）
 
+> 10/15 GCP の準備（フェーズ1）: Cloud Tasks API を有効化。キュー `homis-karte-writer`（東京・maxConcurrentDispatches 1・maxAttempts 1・1件/秒・記録 100%）。
+> 列専用のアカウント `homis-tasks-invoker`（Cloud Run の run.invoker だけ）。タスクは OIDC（宛先＝サービスの URL）＋合言葉ヘッダーで Cloud Run を呼ぶ。
+
 | イメージ | 日付 | 版 | 中身 |
 |---|---|---|---|
+| `:v6` | 2026/10/15 14:21 | v3.1.0（commit 1c981d8） | ナビへの知らせ・/check-group。リビジョン homis-karte-writer-00010-gxq。環境変数 NAVI_WEBAPP_URL（ナビ本番の exec）を追加。書いてよい患者はテスト3人のまま |
 | `:v5` | 2026/09/08 | v3.0.x | 別患者3同時の試験まで（引継書 9/8） |
 
 ---
