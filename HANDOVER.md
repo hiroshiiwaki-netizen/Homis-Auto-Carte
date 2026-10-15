@@ -14,7 +14,9 @@
 | 1 Cloud Run が書いたらナビに知らせる・Cloud Tasks | ✅ cloud v3.1.0（:v6・リビジョン 00010-gxq・黒ヤギ合格・テスト17本）。Cloud Tasks API 有効化、キュー `homis-karte-writer`（同時1・再試行なし・記録100%）、列専用アカウント `homis-tasks-invoker`（run.invoker だけ）、環境変数 NAVI_WEBAPP_URL＝ナビ本番 |
 | 通し試験 | ✅ GCP-P1-20261015-142550: 列 → Cloud Run → テスト舞子に書けた（50.6秒・karte_id あり）→ ナビへ知らせ（1回で届く。試験用の番号なのでナビは「見つからない」）→ DX Chat 200（わざと） |
 | 【確認】 | 1回目の試験タスク（GCP-P1-20261015-142239・14:22:50）は列から消えたが Cloud Run に届いていない。列の記録を有効にする前で原因不明。フェーズ3 で見張る |
-| 次 | フェーズ2（ナビ側: HomisCloud.gs・通知済みの印・集団のそろい判定・checkGroupComplete・戻す用の関数）。岩城さんの「進めて」から |
+| 2 ナビ側 | ✅ ナビ v8.10.0 を本番 @90（16:21・MODE 未設定＝垂水のまま）。v8.11.0（GAS エディタ用: testHomisCloudOnce・requeueHomisTasksToTarumi(_apply)）は push 済み・デプロイ不要。黒ヤギ合格 |
+| ナビからの通し試験 | ✅ 16:44 岩城さんが testHomisCloudOnce → GCP-NAVI-20261015-164426: ナビ→列→Cloud Run→テスト舞子に書けた（49.5秒・karte_id）→ナビ本番へ知らせ（1回・見つからない）→DX Chat 200 |
+| 次 | フェーズ3 切り替え（平日朝 9時台・HOMIS_WRITE_MODE=3）。手順は計画書 5章。【確認】列の一時保存が「保存しない」の範囲か（岩城さん） |
 
 - Cloud Run は NAVI_WEBAPP_URL があるので、/write で書くとナビ本番に知らせる。書いてよい患者はテスト3人だけ（ALLOWED_HOMIS_IDS）なので、本番の注文には影響しない
 - タスクの入れ方（試験）: 合言葉は `gcloud secrets versions access latest --secret=homis-writer-key` を変数に入れて画面に出さない。`gcloud tasks create-http-task <orderId> --queue=homis-karte-writer --location=asia-northeast1 --url=<サービスURL>/write --method=POST --header=Content-Type:application/json --header=X-Writer-Key:<変数> --body-file=<JSON> --oidc-service-account-email=homis-tasks-invoker@gen-lang-client-0979357970.iam.gserviceaccount.com --oidc-token-audience=<サービスURL>`
