@@ -2,7 +2,7 @@
 
 > **最終更新**: 2026-10-15 13:18
 > **バージョン**: v2.1.3 GUI / Watchdog v2.1.4 / Cloud Run `:v5` / 仕様 v0.19
-> **ステータス**: 🟢 本番は垂水 Python v2.1.3。**GCP 移行: フェーズ0（ナビ @89）・フェーズ1（cloud v3.1.0・:v6・Cloud Tasks）完了・通し試験OK（10/15）**。次はフェーズ2（ナビ側）。ナビ未切替
+> **ステータス**: 🟢 **10/15 17時 レントゲンのカルテ書き込みを GCP（Cloud Tasks＋Cloud Run v3.1.1）へ切り替え**。垂水 Python v2.1.3 は往診のため稼働中。戻すときは値だけ変えない（下の表）
 
 ---
 
@@ -16,7 +16,9 @@
 | 【確認】 | 1回目の試験タスク（GCP-P1-20261015-142239・14:22:50）は列から消えたが Cloud Run に届いていない。列の記録を有効にする前で原因不明。フェーズ3 で見張る |
 | 2 ナビ側 | ✅ ナビ v8.10.0 を本番 @90（16:21・MODE 未設定＝垂水のまま）。v8.11.0（GAS エディタ用: testHomisCloudOnce・requeueHomisTasksToTarumi(_apply)）は push 済み・デプロイ不要。黒ヤギ合格 |
 | ナビからの通し試験 | ✅ 16:44 岩城さんが testHomisCloudOnce → GCP-NAVI-20261015-164426: ナビ→列→Cloud Run→テスト舞子に書けた（49.5秒・karte_id）→ナビ本番へ知らせ（1回・見つからない）→DX Chat 200 |
-| 次 | フェーズ3 切り替え（平日朝 9時台・HOMIS_WRITE_MODE=3）。手順は計画書 5章。【確認】列の一時保存が「保存しない」の範囲か（岩城さん） |
+| 3 切り替え | ✅ **10/15 17:0x 本番を GCP へ切り替え**（岩城さんが HOMIS_WRITE_MODE=3・岩城さん判断で今日の夕方）。直前に cloud v3.1.1（:v7・00011-xqv・ALLOWED_HOMIS_IDS="*"・黒ヤギ合格）、垂水のフォルダ未処理0件（17:01）、列 RUNNING・maxAttempts 1・同時1 を確認。列の一時保存は「保存しない」の範囲と岩城さん了承（10/15） |
+| ⚠️ 戻すとき | **値だけ 1 にしない**（列に残った注文を Cloud Run が後から書いて二重になる）。白ヤギが 列を PAUSED → 書いている1件を待つ → requeueHomisTasksToTarumi_apply → 岩城さんが MODE=1 の順（計画書 5章） |
+| 次 | 最初の本番の撮影完了で: 列に入った・Cloud Run の RESULT・ナビへの知らせ・撮影完了 Chat を見届ける。1週間の並行運用で失敗の種類を数える（垂水 Python は往診のため動かしたまま） |
 
 - Cloud Run は NAVI_WEBAPP_URL があるので、/write で書くとナビ本番に知らせる。書いてよい患者はテスト3人だけ（ALLOWED_HOMIS_IDS）なので、本番の注文には影響しない
 - タスクの入れ方（試験）: 合言葉は `gcloud secrets versions access latest --secret=homis-writer-key` を変数に入れて画面に出さない。`gcloud tasks create-http-task <orderId> --queue=homis-karte-writer --location=asia-northeast1 --url=<サービスURL>/write --method=POST --header=Content-Type:application/json --header=X-Writer-Key:<変数> --body-file=<JSON> --oidc-service-account-email=homis-tasks-invoker@gen-lang-client-0979357970.iam.gserviceaccount.com --oidc-token-audience=<サービスURL>`
