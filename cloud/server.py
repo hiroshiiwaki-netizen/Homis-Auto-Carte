@@ -1,8 +1,18 @@
 # -*- coding: utf-8 -*-
 """Cloud Run 受け口（フェーズ2a＋失敗ガード）
 
-GET  /health  生存確認（合言葉不要）
-POST /write   HOMIS 書き込み。同期。ナビ切替はまだしない。
+==============================================================================
+バージョン: 3.1.0
+最終更新: 2026/10/15
+改定履歴（新しい順・全体は docs/SPEC_v3_cloud.md 0章「モジュール別の版」）:
+  v3.1.0 10/15 書き終えたらナビの doPost に知らせる（NAVI_WEBAPP_URL があるときだけ・xray_karte だけ）
+               ・POST /check-group（集団の確かめ役をナビへ中継）を追加（GCP 移行計画 v0.4 フェーズ1）
+  v3.0.x 09/08 受け口2a・失敗ガード・結果シート（2b）・fax_so・bot_s_interrupt
+==============================================================================
+
+GET  /health       生存確認（合言葉不要）
+POST /write        HOMIS 書き込み。同期。書き終えたらナビに知らせる（NAVI_WEBAPP_URL があるとき）
+POST /check-group  集団の確かめ役。ナビの checkGroupComplete を呼ぶだけ（Cloud Tasks の予約から呼ばれる）
 
 安全:
   - 合言葉 X-Writer-Key が空なら 503、不一致は 401
@@ -28,6 +38,7 @@ from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 
+import navi_callback
 from browser_actions import BrowserActions
 from result_sheet import claim, enabled as sheet_enabled
 from result_sheet import finish, result_from_row
@@ -254,32 +265,60 @@ class Handler(BaseHTTPRequestHandler):
             return
         self._send(404, {"ok": False, "error": "not_found"})
 
-    def do_POST(self):
-        if self.path.split("?")[0] != "/write":
-            self._send(404, {"ok": False, "error": "not_found"})
+    def _drain(self):
+        """断るときも本文を読み切る（読まずに閉じると、送る側が「接続を切られた」になり応答コードが読めない）"""
+        try:
+            length = int(self.headers.get("Content-Length", "0") or 0)
+        except ValueError:
             return
+        if 0 < length <= 200000:
+            self.rfile.read(length)
+
+    def _auth_and_body(self):
+        """合言葉と本文の確かめ。だめなら応答を返して None"""
         if not os.environ.get("HOMIS_WRITER_KEY"):
             logger.error("HOMIS_WRITER_KEY が空")
+            self._drain()
             self._send(503, {"ok": False, "error": "key_not_set"})
-            return
+            return None
         if not _key_ok(self.headers.get("X-Writer-Key", "")):
+            self._drain()
             self._send(401, {"ok": False, "error": "unauthorized"})
-            return
+            return None
         try:
             length = int(self.headers.get("Content-Length", "0") or 0)
         except ValueError:
             self._send(400, {"ok": False, "error": "bad_body"})
-            return
+            return None
         if length <= 0 or length > 200000:
             self._send(400, {"ok": False, "error": "bad_body"})
-            return
+            return None
         try:
             data = json.loads(self.rfile.read(length).decode("utf-8"))
         except Exception:
             self._send(400, {"ok": False, "error": "bad_json"})
-            return
+            return None
         if not isinstance(data, dict):
             self._send(400, {"ok": False, "error": "bad_json"})
+            return None
+        return data
+
+    def do_POST(self):
+        path = self.path.split("?")[0]
+        if path not in ("/write", "/check-group"):
+            self._send(404, {"ok": False, "error": "not_found"})
+            return
+        data = self._auth_and_body()
+        if data is None:
+            return
+        if path == "/check-group":
+            # v3.1.0: 集団の確かめ役（Cloud Tasks の予約から）。判定と DX Chat はナビ側
+            group_id = str(data.get("groupId") or "")
+            if not group_id:
+                self._send(400, {"ok": False, "error": "missing_group_id"})
+                return
+            res = navi_callback.check_group(group_id)
+            self._send(200, {"ok": True, "navi": res})
             return
         order_id = str(data.get("orderId") or "")
         homis_id = str(data.get("homisId") or "")
@@ -314,6 +353,12 @@ class Handler(BaseHTTPRequestHandler):
             code = 200
         else:
             code = 500
+        # v3.1.0: 書き終えたらナビに知らせる（垂水 Python と同じ）。成功・失敗とも知らせる（撮影完了 Chat は止めない）
+        # 直リンク（karte_id 入り）だけ渡し、取れなければ空＝ナビが患者ページで出す（仕様 7.2 #8）
+        # 同じ注文の2回目（409）と結果シートの失敗（503）は知らせない（1回目が知らせる／書いていない）
+        if template == "xray_karte" and code in (200, 500) and navi_callback.enabled():
+            url = out.get("karte_url") or ""
+            out["navi"] = navi_callback.notify_karte(order_id, url if "karte_id=" in url else "")
         self._send(code, out)
 
 
