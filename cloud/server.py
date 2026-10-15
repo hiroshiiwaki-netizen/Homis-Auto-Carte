@@ -2,9 +2,10 @@
 """Cloud Run 受け口（フェーズ2a＋失敗ガード）
 
 ==============================================================================
-バージョン: 3.1.0
+バージョン: 3.1.1
 最終更新: 2026/10/15
 改定履歴（新しい順・全体は docs/SPEC_v3_cloud.md 0章「モジュール別の版」）:
+  v3.1.1 10/15 ALLOWED_HOMIS_IDS="*" で全員を許可（本番の切り替え用）。許可の外で断ったときもナビ（空の URL）と DX に知らせる
   v3.1.0 10/15 書き終えたらナビの doPost に知らせる（NAVI_WEBAPP_URL があるときだけ・xray_karte だけ）
                ・POST /check-group（集団の確かめ役をナビへ中継）を追加（GCP 移行計画 v0.4 フェーズ1）
   v3.0.x 09/08 受け口2a・失敗ガード・結果シート（2b）・fax_so・bot_s_interrupt
@@ -113,7 +114,10 @@ def _click_cloud(self, selector, selector_type="css", text_contains=""):
 
 
 def _allowed_ids():
-    raw = os.environ.get("ALLOWED_HOMIS_IDS", "2277808")
+    """書いてよい患者。None なら全員（v3.1.1: ALLOWED_HOMIS_IDS="*"・本番の切り替え用）。未設定はテスト舞子だけ"""
+    raw = os.environ.get("ALLOWED_HOMIS_IDS", "2277808").strip()
+    if raw == "*":
+        return None
     return {x.strip() for x in raw.split(",") if x.strip()}
 
 
@@ -329,11 +333,24 @@ class Handler(BaseHTTPRequestHandler):
         if not order_id or not homis_id:
             self._send(400, {"ok": False, "error": "missing_ids"})
             return
-        if homis_id not in _allowed_ids():
-            logger.warning("拒否 homisId は許可リスト外 orderId=%s", order_id)
-            self._send(403, {"ok": False, "error": "homis_id_not_allowed"})
-            return
         template = _template_name(data)
+        allowed = _allowed_ids()
+        if allowed is not None and homis_id not in allowed:
+            logger.warning("拒否 homisId は許可リスト外 orderId=%s", order_id)
+            out = {"ok": False, "error": "homis_id_not_allowed"}
+            # v3.1.1: 黙って止めない。ナビに空の URL で知らせ（撮影完了 Chat は患者ページで出る）、DX にも知らせる
+            if template == "xray_karte" and navi_callback.enabled():
+                try:
+                    out["navi"] = navi_callback.notify_karte(order_id, "")
+                    navi_callback.notify_dx(
+                        "HOMIS ライター（GCP）: 書いてよい患者の設定（ALLOWED_HOMIS_IDS）の外なので、カルテを書きませんでした。"
+                        f"\norderId={order_id}\n（撮影完了 Chat は患者ページで出ています。設定を確かめ、カルテは手で作ってください）",
+                        order_id,
+                    )
+                except Exception as e:
+                    logger.error("許可外の知らせで予期しない例外 orderId=%s err=%s", order_id, type(e).__name__)
+            self._send(403, out)
+            return
         if template not in ALLOWED_TEMPLATES:
             self._send(400, {"ok": False, "error": "unknown_template"})
             return

@@ -246,6 +246,30 @@ class Phase1(unittest.TestCase):
         self.assertEqual(out["navi"]["message"], "TypeError")
         self.assertTrue(out["success"])
 
+    def test_s12_allow_all_with_star(self):
+        # v3.1.1: ALLOWED_HOMIS_IDS="*" なら許可リストの外の患者も書く（本番の切り替え用）
+        os.environ["ALLOWED_HOMIS_IDS"] = "*"
+        self.next_result = {"success": True, "karte_url": "https://h/?karte_id=5", "error_type": ""}
+        code, out = post(self.base + "/write", self.body(oid="GCP-T-ALL", homisId="1234567"))
+        self.assertEqual(code, 200)
+        self.assertEqual(self.navi.calls, [{"action": "updateHomisLink", "orderId": "GCP-T-ALL", "homisUrl": "https://h/?karte_id=5"}])
+
+    def test_s13_not_allowed_still_notifies(self):
+        # v3.1.1: 許可の外で断るときも黙らない（ナビに空の URL・DX に1通）。書かない
+        called = []
+        server.write_karte = lambda data: called.append(data) or {}
+        code, out = post(self.base + "/write", self.body(oid="GCP-T-NG403", homisId="1234567"))
+        self.assertEqual(code, 403)
+        self.assertEqual(called, [])
+        self.assertEqual(self.navi.calls, [{"action": "updateHomisLink", "orderId": "GCP-T-NG403", "homisUrl": ""}])
+        self.assertEqual(len(self.dx.calls), 1)
+        self.assertIn("ALLOWED_HOMIS_IDS", self.dx.calls[0]["text"])
+
+    def test_s14_unset_means_test_patient_only(self):
+        # 未設定はテスト舞子だけ（今までどおり）
+        os.environ.pop("ALLOWED_HOMIS_IDS", None)
+        self.assertEqual(server._allowed_ids(), {"2277808"})
+
     def test_s10_write_still_needs_key(self):
         code, _ = post(self.base + "/write", self.body(), key="wrong-k")
         self.assertEqual(code, 401)
