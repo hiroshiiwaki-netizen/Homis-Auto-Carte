@@ -2,9 +2,10 @@
 """Cloud Run 受け口（フェーズ2a＋失敗ガード）
 
 ==============================================================================
-バージョン: 3.1.1
-最終更新: 2026/10/15
+バージョン: 3.1.2
+最終更新: 2026/10/19
 改定履歴（新しい順・全体は docs/SPEC_v3_cloud.md 0章「モジュール別の版」）:
+  v3.1.2 10/19 カルテ番号が取れても途中の手順が失敗していたら DX に知らせる（直リンク付き）。押し方の改善は src/browser_actions.py v1.2.0
   v3.1.1 10/15 ALLOWED_HOMIS_IDS="*" で全員を許可（本番の切り替え用）。許可の外で断ったときもナビ（空の URL）と DX に知らせる
   v3.1.0 10/15 書き終えたらナビの doPost に知らせる（NAVI_WEBAPP_URL があるときだけ・xray_karte だけ）
                ・POST /check-group（集団の確かめ役をナビへ中継）を追加（GCP 移行計画 v0.4 フェーズ1）
@@ -234,6 +235,15 @@ def write_karte(data: dict) -> dict:
     log_result(order_id, bool(result.get("success")), kid, err, total)
     if _should_notify_dx(opened, kid, err):
         _notify_dx_empty(order_id, _patient_url(homis_id, url), _template_name(data))
+    failed_steps = [str(s) for s in (result.get("failed_steps") or [])]
+    if result.get("success") and kid and failed_steps:
+        # v3.1.2: カルテ番号が取れても、途中の手順の失敗は黙らない（10/16 に「外来を選択」が失敗し、種別が定期のまま保存された）
+        navi_callback.notify_dx(
+            "HOMIS ライター（GCP）: カルテは保存しましたが、途中の手順が失敗しました: " + "・".join(failed_steps)
+            + "\nカルテの種別（外来）や中身を確認し、違っていれば HOMIS で直してください。"
+            + f"\n{_patient_url(homis_id, url)}\norderId={order_id}",
+            order_id,
+        )
     if sheet_row:
         try:
             finish(sheet_row, _sheet_status(bool(result.get("success")), kid), url, err)
@@ -248,6 +258,7 @@ def write_karte(data: dict) -> dict:
         "total_sec": round(total, 1),
         "karte_id": kid,
         "karte_url": url,
+        "failed_steps": failed_steps,
     }
 
 

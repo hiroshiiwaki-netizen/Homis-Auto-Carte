@@ -4,7 +4,11 @@
 ====================
 YAMLテンプレートを読み込み、ブラウザ操作を実行
 
-v1.0.0 - 初版 (2026/01/26)
+バージョン: 1.1.0
+最終更新: 2026/10/19
+改定履歴（新しい順・全体は docs/SPEC_v3_cloud.md 0章「モジュール別の版」）:
+  v1.1.0 10/19 失敗した手順の名前を result["failed_steps"] に全部返す（動きは同じ。Cloud Run が DX に知らせるのに使う）
+  v1.0.0 01/26 初版
 """
 
 import time
@@ -198,6 +202,8 @@ class TemplateEngine:
                         logger.error(f"ステップ失敗: {name}")
                         if not first_fail:
                             first_fail = name
+                        # 2026-10-19: 失敗した手順を全部返す（Cloud Run がカルテ番号ありでも DX に知らせるため）
+                        result.setdefault("failed_steps", []).append(name)
             
             # 完了後処理
             on_complete = template.get("on_complete", [])

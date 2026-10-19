@@ -46,6 +46,7 @@ sys.modules["shared_log"] = sl
 import navi_callback  # noqa: E402
 import server  # noqa: E402
 
+ORIG_WRITE_KARTE = server.write_karte  # v3.1.2 のテストで本物の write_karte を使う（setUp で偽物に差し替える前に控える）
 navi_callback.WAITS = (0, 0)  # テストでは待たない
 navi_callback.TIMEOUT_SEC = 2
 
@@ -269,6 +270,24 @@ class Phase1(unittest.TestCase):
         # 未設定はテスト舞子だけ（今までどおり）
         os.environ.pop("ALLOWED_HOMIS_IDS", None)
         self.assertEqual(server._allowed_ids(), {"2277808"})
+
+    def test_s15_failed_step_with_karte_id_alerts_dx(self):
+        # v3.1.2: カルテ番号が取れても、途中の手順の失敗（10/16 の「外来を選択」）は DX に知らせる（直リンク付き）
+        url = "https://homis.jp/homic/?pid=patient_detail&patient_id=1234567&karte_id=99"
+        server._run_once = lambda data: {"success": True, "karte_url": url, "error_type": "step:外来を選択", "failed_steps": ["外来を選択"]}
+        out = ORIG_WRITE_KARTE(self.body(oid="GCP-T-STEP"))
+        self.assertEqual(out["failed_steps"], ["外来を選択"])
+        self.assertEqual(len(self.dx.calls), 1)
+        self.assertIn("外来を選択", self.dx.calls[0]["text"])
+        self.assertIn("karte_id=99", self.dx.calls[0]["text"])
+        self.assertIn("GCP-T-STEP", self.dx.calls[0]["text"])
+
+    def test_s16_no_failed_step_no_alert(self):
+        url = "https://homis.jp/homic/?pid=patient_detail&patient_id=1234567&karte_id=98"
+        server._run_once = lambda data: {"success": True, "karte_url": url, "error_type": ""}
+        out = ORIG_WRITE_KARTE(self.body(oid="GCP-T-OK"))
+        self.assertEqual(out["failed_steps"], [])
+        self.assertEqual(self.dx.calls, [])
 
     def test_s10_write_still_needs_key(self):
         code, _ = post(self.base + "/write", self.body(), key="wrong-k")

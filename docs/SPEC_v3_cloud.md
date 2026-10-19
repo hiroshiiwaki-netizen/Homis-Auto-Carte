@@ -18,15 +18,19 @@
 
 | ファイル | 版 | 最終更新 | 役割 |
 |---|---|---|---|
-| server.py | 3.1.1 | 2026/10/15 | 受け口（/health・/write・/check-group）・失敗ガード |
+| server.py | 3.1.2 | 2026/10/19 | 受け口（/health・/write・/check-group）・失敗ガード |
 | navi_callback.py | 3.1.0 | 2026/10/15 | ナビの doPost への知らせ（再送・DX Chat） |
 | result_sheet.py | 3.0.0 | 2026/09/08 | 結果シート（orderId の二重を断る）。先頭の版は次に直すときに書く |
-| write_once.py | 3.0.0 | 2026/09/04 | Job の手動試験。先頭の版は次に直すときに書く |
+| write_once.py | 3.0.0 | 2026/09/04 |
+| src/browser_actions.py（cloud にコピー・垂水と共通） | 1.2.0 | 2026/10/19 | 文字で探して押す: 待つ・JavaScript で押す・選べたかの確かめ・かぶさった物の記録 |
+| src/template_engine.py（同上） | 1.1.0 | 2026/10/19 | 失敗した手順を failed_steps で全部返す |
+| src/templates/xray_karte.yaml（同上） | 2026/10/19 | 2026/10/19 | 「外来を選択」に verify_checked | Job の手動試験。先頭の版は次に直すときに書く |
 
 ### 0.2 改定履歴（新しい順）
 
 | 版 | 日付 | 主な変更 | 変えたファイル |
 |---|---|---|---|
+| v3.1.2 | 2026/10/19 | 10/16 本番で「外来を選択」が押せず（覆いで intercepted）種別が定期のまま保存された件: 押せるまで待つ（最大10秒）・だめなら JavaScript で押す・選べたかを確かめる・失敗した手順があればカルテ番号ありでも DX Chat（直リンク付き）。テスト: 本物の Chrome で覆いをかぶせた画面 6本（test_label_click.py）＋ test_phase1.py 22本 | server.py・src/browser_actions.py・src/template_engine.py・src/templates/xray_karte.yaml |
 | v3.1.1 | 2026/10/15 | ALLOWED_HOMIS_IDS="*" で全員を許可（本番の切り替え用・未設定はテスト舞子だけ）。許可の外で断ったときもナビ（空の URL）と DX に知らせる（黙って止めない）。テスト20本 | server.py |
 | v3.1.0 | 2026/10/15 | 書き終えたらナビの doPost（updateHomisLink）に知らせる（NAVI_WEBAPP_URL があるときだけ・xray_karte だけ・応答なし／5xx だけ最大3回・だめなら DX Chat）。POST /check-group（集団の確かめ役）。断るときも本文を読み切る。テスト `cloud/tests/test_phase1.py` 17本（黒ヤギ合格・知らせの例外の囲い・受け取りの待ち60秒） | server.py・navi_callback.py（新）・Dockerfile・prepare_cloud_build.ps1 |
 | v3.0.x | 2026/09/04〜09/08 | Job 試験・受け口2a・失敗ガード（7章）・結果シート（2b）・fax_so・bot_s_interrupt（9.5・9.6 章） | server.py・result_sheet.py・write_once.py |

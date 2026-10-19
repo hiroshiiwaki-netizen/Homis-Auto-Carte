@@ -4,7 +4,13 @@
 ======================
 YAMLテンプレートで指定されたアクションを実行
 
-v1.1.0 - A/P Summary欄の選択ロジック修正 (2026/01/26)
+バージョン: 1.2.0
+最終更新: 2026/10/19
+改定履歴（新しい順・全体は docs/SPEC_v3_cloud.md 0章「モジュール別の版」）:
+  v1.2.0 10/19 文字で探して押す click（text_contains）: 押せるまで最大10秒・0.5秒おきに押し直す／上に何かかぶさって押せなければ
+               JavaScript で押す／verify_checked のときは選べたかを確かめる／かぶさった物のタグ・id・class だけを記録
+               （10/16 本番で「外来を選択」が element click intercepted になり、種別が定期のまま保存された）
+  v1.1.0 01/26 A/P Summary欄の選択ロジック修正
 """
 
 import time
@@ -14,6 +20,9 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait, Select
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, NoAlertPresentException
+from selenium.common.exceptions import (
+    ElementClickInterceptedException, ElementNotInteractableException, StaleElementReferenceException,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +59,11 @@ class BrowserActions:
             
             # アクション実行
             if action_type == "click":
-                self._action_click(selector, selector_type, text_contains)
+                if text_contains:
+                    # v1.2.0: 文字で探して押すときは、待つ・別の押し方・確かめるをする（cloud の押し方の差し替えとは別の入口）
+                    self._click_label_safely(selector, text_contains, bool(action.get("verify_checked")))
+                else:
+                    self._action_click(selector, selector_type, text_contains)
             elif action_type == "input":
                 trigger_event = action.get("trigger_input_event", False)
                 self._action_input(selector, value, trigger_event, selector_type)
@@ -142,6 +155,81 @@ class BrowserActions:
         element = self._find_element(selector, clickable=True, selector_type=selector_type)
         element.click()
     
+    # ---------- v1.2.0: 文字で探して押す（ラベル）を確実にする ----------
+
+    _JS_BLOCKER = """
+        var r = arguments[0].getBoundingClientRect();
+        var x = r.left + r.width / 2, y = r.top + r.height / 2;
+        var e = document.elementFromPoint(x, y);
+        if (!e) return 'none';
+        return e.tagName + '#' + (e.id || '') + '.' + String(e.className || '').slice(0, 60);
+    """
+    _JS_SELECT = """
+        var l = arguments[0];
+        var i = l.control || l.querySelector('input');
+        if (i) { i.click(); return true; }
+        l.click();
+        return false;
+    """
+    _JS_CHECKED = """
+        var l = arguments[0];
+        var i = l.control || l.querySelector('input');
+        return i ? !!i.checked : null;
+    """
+
+    def _find_label(self, selector: str, text_contains: str):
+        for elem in self.driver.find_elements(By.TAG_NAME, selector):
+            try:
+                if text_contains in elem.text:
+                    return elem
+            except StaleElementReferenceException:
+                continue
+        return None
+
+    def _blocker(self, elem) -> str:
+        """上にかぶさっている要素のタグ・id・class だけ（文字は返さない＝患者情報を出さない）"""
+        try:
+            return str(self.driver.execute_script(self._JS_BLOCKER, elem))[:100]
+        except Exception:
+            return "unknown"
+
+    def _click_label_safely(self, selector: str, text_contains: str, verify_checked: bool = False,
+                            timeout_sec: float = 10.0, interval_sec: float = 0.5):
+        """
+        文字で探して押す。押せるまで待って押し直し、だめなら JavaScript で押す。verify_checked なら選べたかを確かめる
+        失敗したら例外（呼び出し元の execute_action が「手順の失敗」にする）
+        """
+        deadline = time.time() + timeout_sec
+        elem = None
+        how = ""
+        while True:
+            elem = self._find_label(selector, text_contains)
+            if elem is not None:
+                try:
+                    elem.click()
+                    how = "click"
+                    break
+                except ElementClickInterceptedException:
+                    logger.warning(f"'{text_contains}' の上に何かかぶさっている: {self._blocker(elem)}")
+                except (ElementNotInteractableException, StaleElementReferenceException):
+                    pass
+            if time.time() >= deadline:
+                break
+            time.sleep(interval_sec)
+        if not how:
+            if elem is None:
+                raise Exception(f"'{text_contains}' を含む要素が見つかりません")
+            # 待っても押せない → 画面の部品を直接押す（上にかぶさった物を通さない）
+            self.driver.execute_script(self._JS_SELECT, elem)
+            how = "js"
+            logger.warning(f"'{text_contains}' を JavaScript で押した（かぶさり: {self._blocker(elem)}）")
+        if verify_checked:
+            time.sleep(0.3)
+            checked = self.driver.execute_script(self._JS_CHECKED, elem)
+            if checked is not True:
+                raise Exception(f"'{text_contains}' が選ばれていない（{how}・checked={checked}）")
+        logger.info(f"'{text_contains}' を含む要素をクリック（{how}）")
+
     def _action_input(self, selector: str, value: str, trigger_event: bool = False, selector_type: str = "css"):
         """入力アクション"""
         element = self._find_element(selector, selector_type=selector_type)

@@ -49,6 +49,7 @@ steps:
     action: click
     selector: "label"
     text_contains: "外来"
+    verify_checked: true   # 2026-10-19: 押したあと「外来」が選ばれたかを確かめる（10/16 に定期のまま保存された）
     wait_after: 1000
 
   - name: 指示医を選択
