@@ -30,6 +30,10 @@ PAGE = """<!doctype html><meta charset="utf-8"><body style="margin:0">
 </form>
 <div id="cover" style="position:fixed;left:0;top:0;width:100%;height:100%;background:rgba(0,0,0,.1);z-index:9"></div>
 <script>
+  // 外来に切り替わったときの画面の処理（HOMIS の onchange の代わり）。JavaScript で押しても動くかを確かめる（黒ヤギ 10/19 指摘3）
+  window.__changed = 0;
+  document.querySelector('input[value=gairai]').addEventListener('change', function () { window.__changed++; });
+  document.getElementById('L').addEventListener('click', function () { window.__labelClicked = (window.__labelClicked || 0) + 1; });
   var t = new URLSearchParams(location.search).get('cover');
   if (t === 'none') document.getElementById('cover').remove();
   else if (t !== 'forever') setTimeout(function () { document.getElementById('cover').remove(); }, Number(t));
@@ -78,6 +82,9 @@ class LabelClick(unittest.TestCase):
         self.assertTrue(self.step())
         self.assertTrue(self.checked("gairai"))
         self.assertFalse(self.checked("teiki"))
+        # JavaScript で押しても change が1回起き、label のクリックの処理も動く（画面の切り替えの処理が走る）
+        self.assertEqual(self.driver.execute_script("return window.__changed"), 1)
+        self.assertGreaterEqual(self.driver.execute_script("return window.__labelClicked || 0"), 1)
 
     def test_3_no_cover_plain_click(self):
         self.open("none")
