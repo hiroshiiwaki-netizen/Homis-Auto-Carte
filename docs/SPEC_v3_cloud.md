@@ -54,7 +54,7 @@ FAX カルテの受け口（cloud_fax_receiver/・別の Cloud Run・仕様 `doc
 
 | イメージ | 日付 | 版 | 中身 |
 |---|---|---|---|
-| `homis-fax-receiver:v0.1.2` | 2026/10/26 14:04 | 受け口 v0.1.2（commit 前） | リビジョン homis-fax-receiver-00001-dnm。黒ヤギ実装レビュー6回目【進めてよい】・security-check 問題なし。確認: /health 200（0.1.2）・合言葉なし 401・違う 401・ほかの入口 404・正しい合言葉のダミー 200・起動の記録 key_configured true・ダミーの記録に本文と番号なし。WF1573 にはまだ横付けしていない |
+| `homis-fax-receiver:v0.1.2` | 2026/10/26 14:04 | 受け口 v0.1.2（commit d4b2508） | リビジョン homis-fax-receiver-00001-dnm。黒ヤギ実装レビュー6回目【進めてよい】・security-check 問題なし。確認: /health 200（0.1.2）・合言葉なし 401・違う 401・ほかの入口 404・正しい合言葉のダミー 200・起動の記録 key_configured true・ダミーの記録に本文と番号なし。WF1573 にはまだ横付けしていない |
 
 ### 0.3 Cloud Run のデプロイ履歴（`homis-karte-writer`・東京）
 
