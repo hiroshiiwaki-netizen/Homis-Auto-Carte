@@ -26,14 +26,35 @@
 | src/template_engine.py（同上） | 1.1.0 | 2026/10/19 | 失敗した手順を failed_steps で全部返す |
 | src/templates/xray_karte.yaml（同上） | 2026/10/19 | 2026/10/19 | 「外来を選択」に verify_checked | Job の手動試験。先頭の版は次に直すときに書く |
 
+FAX カルテの受け口（cloud_fax_receiver/・別の Cloud Run・仕様 `docs/FAXカルテ_検討/SPEC_受け口_横付け_v0.md`）
+
+| ファイル | 版 | 最終更新 | 役割 |
+|---|---|---|---|
+| cloud_fax_receiver/server.py | 0.1.2 | 2026/10/26 | 段1: Tukusi WF1573 の横付けから受け取り、様子だけ記録（カルテは書かない）。未配置 |
+| tools/fax_shadow_reconcile.py | 0.1.3 | 2026/10/26 | 受け口のログと p281 の「カルテ順番札」を札番号で突き合わせる（読むだけ） |
+
 ### 0.2 改定履歴（新しい順）
 
 | 版 | 日付 | 主な変更 | 変えたファイル |
 |---|---|---|---|
+| 道具 v0.1.3 | 2026/10/26 | 黒ヤギ5回目（【進めてよい】・低3件）を反映: --since・--until の秒・時刻の省略を補う・読めない形は分かる言葉で止める・--p281 に渡すログの範囲を説明に。制御文字の対照表を仕様書10章に。受け口は 0.1.2 のまま | tools/fax_shadow_reconcile.py・tests/test_integration.py |
+| 受け口 v0.1.2 | 2026/10/26 | 黒ヤギ再レビュー（【進めてよい】・指摘3件）を反映: 道具の --since・--until を受け口のログにも（UTC → 日本時間・until は余裕300秒・時間帯の外で返された札は余りにしない）・受け口は制御文字の種類（ctrl_codes）も記録。大きすぎる本文は 413 でなく切断に見えることがある（仕様書10章に注意）。テスト: 単体24件＋結合3件＝26件・わざと壊した16通りすべて赤 | cloud_fax_receiver/server.py・tests/・tools/fax_shadow_reconcile.py |
+| 受け口 v0.1.1 | 2026/10/26 | 黒ヤギ実装レビュー（【進めてよい】・指摘5件）を反映: 読み込みに10秒の上限・読めなければ返事なしで切る・起動直後の印を鍵の中で・道具は p281 側の札番号の重なりも出す・ファイルを with で閉じる。テスト: 単体23件＋結合2件＝25件・わざと壊した12通りすべて赤 | cloud_fax_receiver/server.py・tests/・tools/fax_shadow_reconcile.py |
+| 受け口 v0.1.0 | 2026/10/26 | FAX カルテの受け口（段1・横付けで受け取るだけ）を新規作成。合言葉（Bearer・空白を除いて compare_digest）→ 大きさ（256KB 超 413・長さなし 411）→ JSON の順。本文と HOMIS ID は記録しない。札番号（ticket または lock）で p281 と突き合わせる。断るときも 256KB 以内は読み捨ててから返事（読まずに閉じると番号が伝わらない）。ログは鍵をかけて1回で1行（同時8件で行が混ざった）。テスト: 単体18件＋結合2件・わざと壊した9通りすべて赤。未配置 | cloud_fax_receiver/server.py・Dockerfile・tests/（新）・tools/fax_shadow_reconcile.py（新） |
 | v3.1.2 | 2026/10/19 | 10/16 本番で「外来を選択」が押せず（覆いで intercepted）種別が定期のまま保存された件: 押せるまで待つ（最大10秒）・だめなら JavaScript で押す・選べたかを確かめる・失敗した手順があればカルテ番号ありでも DX Chat（直リンク付き）。テスト: 本物の Chrome で覆いをかぶせた画面 6本（test_label_click.py）＋ test_phase1.py 22本 | server.py・src/browser_actions.py・src/template_engine.py・src/templates/xray_karte.yaml |
 | v3.1.1 | 2026/10/15 | ALLOWED_HOMIS_IDS="*" で全員を許可（本番の切り替え用・未設定はテスト舞子だけ）。許可の外で断ったときもナビ（空の URL）と DX に知らせる（黙って止めない）。テスト20本 | server.py |
 | v3.1.0 | 2026/10/15 | 書き終えたらナビの doPost（updateHomisLink）に知らせる（NAVI_WEBAPP_URL があるときだけ・xray_karte だけ・応答なし／5xx だけ最大3回・だめなら DX Chat）。POST /check-group（集団の確かめ役）。断るときも本文を読み切る。テスト `cloud/tests/test_phase1.py` 17本（黒ヤギ合格・知らせの例外の囲い・受け取りの待ち60秒） | server.py・navi_callback.py（新）・Dockerfile・prepare_cloud_build.ps1 |
 | v3.0.x | 2026/09/04〜09/08 | Job 試験・受け口2a・失敗ガード（7章）・結果シート（2b）・fax_so・bot_s_interrupt（9.5・9.6 章） | server.py・result_sheet.py・write_once.py |
+
+### 0.3b Cloud Run のデプロイ履歴（`homis-fax-receiver`・東京・FAX カルテの受け口 段1）
+
+> 誰でも届く（allUsers）・中で合言葉（Secret Manager `fax-receiver-key`）を確かめる。専用アカウント `fax-receiver`（その合言葉を読む権限だけ）。
+> 像は今のライターと同じ置き場 `homis-karte-writer` に別名 `homis-fax-receiver` で置く（このプロジェクトは `--source` が使えない）。
+> 箱 最大2・最小0・同時20・256Mi・タイムアウト30秒。手順と戻し方: `docs/FAXカルテ_検討/配置手順_受け口_段1.md`
+
+| イメージ | 日付 | 版 | 中身 |
+|---|---|---|---|
+| `homis-fax-receiver:v0.1.2` | 2026/10/26 14:04 | 受け口 v0.1.2（commit 前） | リビジョン homis-fax-receiver-00001-dnm。黒ヤギ実装レビュー6回目【進めてよい】・security-check 問題なし。確認: /health 200（0.1.2）・合言葉なし 401・違う 401・ほかの入口 404・正しい合言葉のダミー 200・起動の記録 key_configured true・ダミーの記録に本文と番号なし。WF1573 にはまだ横付けしていない |
 
 ### 0.3 Cloud Run のデプロイ履歴（`homis-karte-writer`・東京）
 
@@ -490,6 +511,7 @@ DX 空カルテ文面（中断の失敗時）:
 
 | 版 | 日付 | 内容 |
 |---|---|---|
+| v0.21 | 2026-10-26 | 0章に FAX カルテの受け口（cloud_fax_receiver/ v0.1.0）の版と改定履歴を追加 |
 | v0.20 | 2026-10-15 | 0章「版の管理」を新設（モジュール別の版・改定履歴・Cloud Run のデプロイ履歴）。v3.1.0: 書き終えたらナビの doPost に知らせる・/check-group（GCP 移行計画 v0.4 フェーズ1） |
 | v0.19 | 2026-09-08 | 運用上限は50件で考える。蓋の適用と50件試験はしない |
 | v0.18 | 2026-09-08 | §5.6 別患者3人同時。karte_idが3つ。max-instances=3 |
