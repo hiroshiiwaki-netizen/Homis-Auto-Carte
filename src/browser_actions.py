@@ -4,9 +4,12 @@
 ======================
 YAMLテンプレートで指定されたアクションを実行
 
-バージョン: 1.2.0
-最終更新: 2026/10/19
+バージョン: 1.3.0
+最終更新: 2026/10/27
 改定履歴（新しい順・全体は docs/SPEC_v3_cloud.md 0章「モジュール別の版」）:
+  v1.3.0 10/27 id などで探して押す click にも verify_checked を使えるようにした（FAX の「算定不要」チェック用）。
+               押せるまで待つ・かぶさったら JavaScript で押す（onclick も動く）・押す前から印が付いていれば押さない（外れるため）・
+               押したあと印が付いたかを確かめる。同じ印の部品が複数あれば見えているものを選ぶ。verify_checked が無い click は今までと同じ
   v1.2.0 10/19 文字で探して押す click（text_contains）: 押せるまで最大10秒・0.5秒おきに押し直す／上に何かかぶさって押せなければ
                JavaScript で押す／verify_checked のときは選べたかを確かめる／かぶさった物のタグ・id・class だけを記録
                （10/16 本番で「外来を選択」が element click intercepted になり、種別が定期のまま保存された）
@@ -62,6 +65,9 @@ class BrowserActions:
                 if text_contains:
                     # v1.2.0: 文字で探して押すときは、待つ・別の押し方・確かめるをする（cloud の押し方の差し替えとは別の入口）
                     self._click_label_safely(selector, text_contains, bool(action.get("verify_checked")))
+                elif action.get("verify_checked"):
+                    # v1.3.0: id などで探して押し、印が付いたかを確かめる（算定不要のチェック）
+                    self._click_checkbox_safely(selector, selector_type)
                 else:
                     self._action_click(selector, selector_type, text_contains)
             elif action_type == "input":
@@ -229,6 +235,63 @@ class BrowserActions:
             if checked is not True:
                 raise Exception(f"'{text_contains}' が選ばれていない（{how}・checked={checked}）")
         logger.info(f"'{text_contains}' を含む要素をクリック（{how}）")
+
+    # ---------- v1.3.0: id などで探して押す（チェックの箱）を確実にする ----------
+
+    _JS_IS_CHECKED = "return ('checked' in arguments[0]) ? !!arguments[0].checked : null;"
+    _JS_CLICK = "arguments[0].click(); return true;"
+
+    def _find_one(self, selector: str, selector_type: str = "css"):
+        """同じ印の部品が複数あれば、画面に見えているものを選ぶ（黒ヤギ 10/27 指摘3: 隠れた方に印を付けない）"""
+        by = By.XPATH if selector_type == "xpath" else By.CSS_SELECTOR
+        found = self.driver.find_elements(by, selector)
+        for e in found:
+            try:
+                if e.is_displayed():
+                    return e
+            except StaleElementReferenceException:
+                continue
+        return found[0] if found else None
+
+    def _click_checkbox_safely(self, selector: str, selector_type: str = "css",
+                               timeout_sec: float = 10.0, interval_sec: float = 0.5):
+        """
+        チェックの箱を、印が付いた状態にする。人と同じ普通のクリックで押す（onclick も動く）。値を直接書き換えない。
+        ・押す前から印が付いていれば押さない（押すと外れるため）
+        ・押せるまで待って押し直し、だめなら JavaScript で押す（element.click() なので onclick も動く）
+        ・押したあと印が付いたかを確かめ、付いていなければ例外（呼び出し元が「手順の失敗」にする）
+        """
+        deadline = time.time() + timeout_sec
+        elem = None
+        how = ""
+        while True:
+            elem = self._find_one(selector, selector_type)
+            if elem is not None:
+                try:
+                    if self.driver.execute_script(self._JS_IS_CHECKED, elem) is True:
+                        how = "already"
+                        break
+                    elem.click()
+                    how = "click"
+                    break
+                except ElementClickInterceptedException:
+                    logger.warning(f"'{selector}' の上に何かかぶさっている: {self._blocker(elem)}")
+                except (ElementNotInteractableException, StaleElementReferenceException):
+                    pass
+            if time.time() >= deadline:
+                break
+            time.sleep(interval_sec)
+        if not how:
+            if elem is None:
+                raise Exception(f"'{selector}' が見つかりません")
+            self.driver.execute_script(self._JS_CLICK, elem)
+            how = "js"
+            logger.warning(f"'{selector}' を JavaScript で押した（かぶさり: {self._blocker(elem)}）")
+        time.sleep(0.3)
+        checked = self.driver.execute_script(self._JS_IS_CHECKED, elem)
+        if checked is not True:
+            raise Exception(f"'{selector}' に印が付いていない（{how}・checked={checked}）")
+        logger.info(f"'{selector}' に印を付けた（{how}）")
 
     def _action_input(self, selector: str, value: str, trigger_event: bool = False, selector_type: str = "css"):
         """入力アクション"""

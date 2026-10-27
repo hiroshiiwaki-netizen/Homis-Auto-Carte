@@ -282,6 +282,24 @@ class Phase1(unittest.TestCase):
         self.assertIn("karte_id=99", self.dx.calls[0]["text"])
         self.assertIn("GCP-T-STEP", self.dx.calls[0]["text"])
 
+    def test_s15b_fax_failed_step_hint(self):
+        # v3.1.3: FAX の型紙の失敗は「算定不要の印」を確かめる文（「外来」と出さない・黒ヤギ 10/27 指摘2）
+        url = "https://homis.jp/homic/?pid=patient_detail&patient_id=1234567&karte_id=97"
+        server._run_once = lambda data: {"success": True, "karte_url": url, "failed_steps": ["算定不要を押す"]}
+        ORIG_WRITE_KARTE(self.body(oid="GCP-T-FAX", template="fax_so", sContent="s", oContent="o"))
+        self.assertEqual(len(self.dx.calls), 1)
+        text = self.dx.calls[0]["text"]
+        self.assertIn("算定不要を押す", text)
+        self.assertIn("算定不要の印", text)
+        self.assertNotIn("外来", text)
+
+    def test_s15c_xray_hint_unchanged(self):
+        # レントゲンの文は今までどおり「外来」
+        url = "https://homis.jp/homic/?pid=patient_detail&patient_id=1234567&karte_id=96"
+        server._run_once = lambda data: {"success": True, "karte_url": url, "failed_steps": ["外来を選択"]}
+        ORIG_WRITE_KARTE(self.body(oid="GCP-T-XR"))
+        self.assertIn("カルテの種別（外来）", self.dx.calls[0]["text"])
+
     def test_s16_no_failed_step_no_alert(self):
         url = "https://homis.jp/homic/?pid=patient_detail&patient_id=1234567&karte_id=98"
         server._run_once = lambda data: {"success": True, "karte_url": url, "error_type": ""}

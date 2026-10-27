@@ -18,11 +18,12 @@
 
 | ファイル | 版 | 最終更新 | 役割 |
 |---|---|---|---|
-| server.py | 3.1.2 | 2026/10/19 | 受け口（/health・/write・/check-group）・失敗ガード |
+| server.py | 3.1.3（未配置・本番は 3.1.2） | 2026/10/27 | 受け口（/health・/write・/check-group）・失敗ガード。3.1.3: 途中の手順の失敗を DX に知らせる文を型紙ごとに |
 | navi_callback.py | 3.1.0 | 2026/10/15 | ナビの doPost への知らせ（再送・DX Chat） |
 | result_sheet.py | 3.0.0 | 2026/09/08 | 結果シート（orderId の二重を断る）。先頭の版は次に直すときに書く |
 | write_once.py | 3.0.0 | 2026/09/04 |
-| src/browser_actions.py（cloud にコピー・垂水と共通） | 1.2.0 | 2026/10/19 | 文字で探して押す: 待つ・JavaScript で押す・選べたかの確かめ・かぶさった物の記録 |
+| src/templates/fax_so.yaml（同上） | 1.1 | 2026/10/27 | FAX カルテ（電話再診・S/O）。1.1 で「算定不要を押す」を足し、電話再診に verify_checked。未配置（cloud v3.1.3 で配置予定） |
+| src/browser_actions.py（cloud にコピー・垂水と共通） | 1.3.0（垂水は古いまま） | 2026/10/27 | 1.3.0: id で探して押す click にも verify_checked（押す前から印があれば押さない・JavaScript で押しても onclick が動く）。未配置。1.2.0 までの説明: | 文字で探して押す: 待つ・JavaScript で押す・選べたかの確かめ・かぶさった物の記録 |
 | src/template_engine.py（同上） | 1.1.0 | 2026/10/19 | 失敗した手順を failed_steps で全部返す |
 | src/templates/xray_karte.yaml（同上） | 2026/10/19 | 2026/10/19 | 「外来を選択」に verify_checked | Job の手動試験。先頭の版は次に直すときに書く |
 
@@ -37,6 +38,7 @@ FAX カルテの受け口（cloud_fax_receiver/・別の Cloud Run・仕様 `doc
 
 | 版 | 日付 | 主な変更 | 変えたファイル |
 |---|---|---|---|
+| v3.1.3（未配置） | 2026/10/27 | FAX の型紙に「算定不要を押す」（岩城さん「FAX は 100% 算定不要」）・電話再診に verify_checked・部品に「id で探して押して印を確かめる」（同じ印が複数なら見えているものを選ぶ）。server.py は途中の手順の失敗を DX に知らせる文を型紙ごとに（FAX で「外来」と出ていた・黒ヤギ 1回目 指摘2）。レントゲンの型紙は変えない。テスト: test_checkbox_click.py 10件（本物の Chrome・型紙 fax_so.yaml を新規〜完了まで通す結合1件）＋ test_label_click 6件・test_phase1 24件すべて OK・わざと壊した9通りすべて赤。黒ヤギ 1回目【進めてよい】・指摘2・3 を直した。仕様 `docs/FAXカルテ_検討/SPEC_段2a_算定不要.md` | cloud/server.py・src/browser_actions.py・src/templates/fax_so.yaml・cloud/tests/test_checkbox_click.py（新）・cloud/tests/test_phase1.py |
 | 道具 v0.1.3 | 2026/10/26 | 黒ヤギ5回目（【進めてよい】・低3件）を反映: --since・--until の秒・時刻の省略を補う・読めない形は分かる言葉で止める・--p281 に渡すログの範囲を説明に。制御文字の対照表を仕様書10章に。受け口は 0.1.2 のまま | tools/fax_shadow_reconcile.py・tests/test_integration.py |
 | 受け口 v0.1.2 | 2026/10/26 | 黒ヤギ再レビュー（【進めてよい】・指摘3件）を反映: 道具の --since・--until を受け口のログにも（UTC → 日本時間・until は余裕300秒・時間帯の外で返された札は余りにしない）・受け口は制御文字の種類（ctrl_codes）も記録。大きすぎる本文は 413 でなく切断に見えることがある（仕様書10章に注意）。テスト: 単体24件＋結合3件＝26件・わざと壊した16通りすべて赤 | cloud_fax_receiver/server.py・tests/・tools/fax_shadow_reconcile.py |
 | 受け口 v0.1.1 | 2026/10/26 | 黒ヤギ実装レビュー（【進めてよい】・指摘5件）を反映: 読み込みに10秒の上限・読めなければ返事なしで切る・起動直後の印を鍵の中で・道具は p281 側の札番号の重なりも出す・ファイルを with で閉じる。テスト: 単体23件＋結合2件＝25件・わざと壊した12通りすべて赤 | cloud_fax_receiver/server.py・tests/・tools/fax_shadow_reconcile.py |

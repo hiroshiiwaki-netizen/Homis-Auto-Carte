@@ -2,9 +2,11 @@
 """Cloud Run 受け口（フェーズ2a＋失敗ガード）
 
 ==============================================================================
-バージョン: 3.1.2
-最終更新: 2026/10/19
+バージョン: 3.1.3
+最終更新: 2026/10/27
 改定履歴（新しい順・全体は docs/SPEC_v3_cloud.md 0章「モジュール別の版」）:
+  v3.1.3 10/27 途中の手順の失敗を DX に知らせる文を型紙ごとに（FAX は「種別（電話再診）・算定不要の印」、レントゲンは今までどおり「外来」）。
+               FAX の型紙 fax_so 1.1（算定不要）・押し方の部品 src/browser_actions.py v1.3.0 と一緒に配る
   v3.1.2 10/19 カルテ番号が取れても途中の手順が失敗していたら DX に知らせる（直リンク付き）。押し方の改善は src/browser_actions.py v1.2.0
   v3.1.1 10/15 ALLOWED_HOMIS_IDS="*" で全員を許可（本番の切り替え用）。許可の外で断ったときもナビ（空の URL）と DX に知らせる
   v3.1.0 10/15 書き終えたらナビの doPost に知らせる（NAVI_WEBAPP_URL があるときだけ・xray_karte だけ）
@@ -61,6 +63,13 @@ WRITE_LOCK = threading.Lock()
 _TLS = threading.local()
 
 _orig_click = BrowserActions._action_click
+
+# v3.1.3: 途中の手順が失敗したとき、DX に「どこを確かめるか」を型紙ごとに伝える
+STEP_FAIL_HINT = {
+    "xray_karte": "カルテの種別（外来）や中身",
+    "fax_so": "カルテの種別（電話再診）・算定不要の印・S と O の中身",
+    "bot_s_interrupt": "カルテの種別（電話再診）や S の中身",
+}
 
 DX_EMPTY = {
     "xray_karte": (
@@ -238,9 +247,11 @@ def write_karte(data: dict) -> dict:
     failed_steps = [str(s) for s in (result.get("failed_steps") or [])]
     if result.get("success") and kid and failed_steps:
         # v3.1.2: カルテ番号が取れても、途中の手順の失敗は黙らない（10/16 に「外来を選択」が失敗し、種別が定期のまま保存された）
+        # v3.1.3: 確かめる所を型紙ごとに（黒ヤギ 10/27 指摘2: FAX の失敗でも「外来」と出ていた）
+        check_hint = STEP_FAIL_HINT.get(_template_name(data), "カルテの中身")
         navi_callback.notify_dx(
             "HOMIS ライター（GCP）: カルテは保存しましたが、途中の手順が失敗しました: " + "・".join(failed_steps)
-            + "\nカルテの種別（外来）や中身を確認し、違っていれば HOMIS で直してください。"
+            + f"\n{check_hint}を確認し、違っていれば HOMIS で直してください。"
             + f"\n{_patient_url(homis_id, url)}\norderId={order_id}",
             order_id,
         )

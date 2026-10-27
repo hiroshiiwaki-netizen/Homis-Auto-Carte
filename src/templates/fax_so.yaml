@@ -1,10 +1,14 @@
 # つくし FAX カルテ（S/O・電話再診）
-# 仕様: docs/SPEC_v3_cloud.md §11
+# 仕様: docs/SPEC_v3_cloud.md §11・docs/FAXカルテ_検討/SPEC_段2a_算定不要.md
 # 失敗・二重防止は §7 / 2b。このファイルは手順だけ。
+# 改定履歴（新しい順・全体は docs/SPEC_v3_cloud.md 0章「モジュール別の版」）:
+#   1.1 2026/10/27 「算定不要を押す」を足した（FAX は 100% 算定不要・岩城さん 10/27）。人と同じ普通のクリックで押し、印が付いたかを確かめる。
+#                  「電話再診を選択」に verify_checked（選べたかを確かめる・10/19 のレントゲンの直しと同じ）
+#   1.0 2026/09/08 初版
 
 name: つくしS/Oカルテ
-description: つくし確認後のカルテ作成（電話再診・SとO）
-version: "1.0"
+description: つくし確認後のカルテ作成（電話再診・SとO・算定不要）
+version: "1.1"
 
 target_url: "https://homis.jp/homic/?pid=patient_detail&patient_id={homisId}&p=5"
 
@@ -22,6 +26,7 @@ steps:
     action: click
     selector: "label"
     text_contains: "電話再診"
+    verify_checked: true   # 2026-10-27: 選べたかを確かめる（10/16 にレントゲンで「外来」が選べず定期のまま保存された件と同じ守り）
     wait_after: 1000
 
   - name: 医科カルテボタンをクリック
@@ -29,6 +34,12 @@ steps:
     selector_type: xpath
     selector: "//a[contains(text(), '医科カルテ')]"
     wait_after: 3000
+
+  - name: 算定不要を押す
+    action: click
+    selector: "#NoNeedToOrca"
+    verify_checked: true   # 2026-10-27: 普通のクリック（onclick の setNoNeedToOrca も動く）。値を直接入れない。印が付いていなければ失敗
+    wait_after: 1000
 
   - name: S欄に入力
     action: js_input
