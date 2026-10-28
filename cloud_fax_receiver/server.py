@@ -2,9 +2,12 @@
 """FAX カルテの受け口（横付けで受け取るだけ・段1）
 
 ==============================================================================
-バージョン: 0.1.2
-最終更新: 2026/10/26
+バージョン: 0.2.0
+最終更新: 2026/10/28
 改定履歴（新しい順・全体は docs/SPEC_v3_cloud.md 0章「モジュール別の版」）:
+  v0.2.0 10/28 段1b 並走の試し書き: FAX_MIRROR=on のとき、受け取った件の S・O を、テスト舞子あての仕事として列 homis-fax-mirror に入れる
+               （書き終わりは待たない・入れられなくても Tukusi には今まで通り 200）。記録に mirror（queued／off／skip／duplicate／error）だけ足す。
+               仕様 docs/FAXカルテ_検討/SPEC_段1b_並走試し書き.md。黒ヤギ1回目の指摘2: 列の名前の前後の空白と「/」を取る
   v0.1.2 10/26 黒ヤギ再レビューの指摘2: 制御文字の種類（ctrl_codes・最大5種類）も記録する（改ページ \f などの見分け用）
   v0.1.1 10/26 黒ヤギ実装レビューの指摘: 読み込みに10秒の上限（少しずつ送る相手で止まらない）・
                読めなかったら静かに切る・起動直後の印を鍵の中で付ける（同時2件で2つ付かない）
@@ -23,12 +26,16 @@ POST /fax/receive   横付けの受け口。合言葉（Bearer）→ 大きさ �
   - 合言葉が合うまで本文の中身は見ない（断るときは 256KB 以内なら読み捨ててから返事をする。切断で番号が伝わらないため）
   - 大きすぎる本文（256KB 超）・長さが無い本文は読まずに 413／411
   - 断った件は時刻と番号だけの短い1行
-  - このプログラムは外へ何も送らない（今のライターも呼ばない）
+  - 外へ送るのは、FAX_MIRROR=on のときの「列 homis-fax-mirror に仕事を入れる」だけ（書く先はテスト舞子に固定・v0.2.0）。
+    off なら外へ何も送らない
 """
 from __future__ import annotations
 
+import base64
 import hmac
 import json
+import urllib.error
+import urllib.request
 import os
 import re
 import sys
@@ -37,7 +44,7 @@ import time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "0.1.2"
+VERSION = "0.2.0"
 MAX_BODY = 256 * 1024          # 受け取る本文の上限（バイト）
 READ_TIMEOUT = 10.0            # 1回の読み込みを待つ上限（秒）。少しずつ送る相手で箱がふさがらないように
 LABEL_MAX = 40                 # source・doc_type・route を記録する最大の長さ
@@ -47,6 +54,82 @@ QQ_RE = re.compile(r"[?？]{2,}")                     # 「??」の続き（手�
 # よくある文字化けの字（UTF-8 を Shift_JIS で読んだときに出やすい）。手前の化けの目安で、合否には使わない
 MOJIBAKE_CHARS = set("縺繧譁蜈繝螟蝣邵髢")
 PROCESS_START = time.time()
+
+# ---------- v0.2.0: 本番と並走して、同じ中身をテスト舞子に書く（試し書き・段1b） ----------
+# FAX_MIRROR="on" のときだけ動く。列 homis-fax-mirror に、カルテライターあての仕事を1つ入れるだけ（書き終わりは待たない）
+MIRROR_MARK = "【GCP試し書き・本物は別の患者さん】"
+MIRROR_TIMEOUT = 5.0   # 列に入れる・トークンを取る ときの待ち時間の上限（秒）。超えたら入れずに先へ（Tukusi を待たせない）
+# 試し書きの宛先として許す患者（テスト舞子・テスト西宮・テスト芦屋）。設定を間違えても本物の患者さんには書かない
+MIRROR_TEST_PATIENTS = {"2277808", "2080376", "2196689"}
+
+
+def mirror_on() -> bool:
+    return os.environ.get("FAX_MIRROR", "").strip().lower() == "on"
+
+
+def mirror_queue() -> str:
+    """列の名前（projects/…/locations/…/queues/…）。前後の空白と「/」を取る（黒ヤギ 10/28 指摘2: //projects で 404 になる）"""
+    return os.environ.get("MIRROR_QUEUE", "").strip().strip("/")
+
+
+def build_mirror_task(ticket: str, s: str, o: str) -> dict:
+    """列に入れる仕事（Cloud Tasks の task）を作る。書く先は必ずテスト舞子（設定 MIRROR_HOMIS_ID・既定 2277808）"""
+    writer = os.environ.get("WRITER_URL", "").rstrip("/")
+    order_id = "FAX-MIRROR-" + ticket
+    payload = {
+        "orderId": order_id,
+        "homisId": os.environ.get("MIRROR_HOMIS_ID", "2277808").strip(),
+        "patientName": "テスト",
+        "template": "fax_so",
+        "sContent": MIRROR_MARK + s,
+        "oContent": o,
+    }
+    return {"task": {
+        "name": mirror_queue() + "/tasks/" + order_id,
+        "httpRequest": {
+            "url": writer + "/write",
+            "httpMethod": "POST",
+            "headers": {"Content-Type": "application/json", "X-Writer-Key": os.environ.get("WRITER_KEY", "").strip()},
+            "body": base64.b64encode(json.dumps(payload, ensure_ascii=False).encode("utf-8")).decode("ascii"),
+            "oidcToken": {"serviceAccountEmail": os.environ.get("TASKS_INVOKER_SA", ""), "audience": writer},
+        },
+    }}
+
+
+def _access_token() -> str:
+    """箱の中の metadata サーバーから、受け口のアカウントのトークンを取る（標準部品だけ）"""
+    url = os.environ.get("METADATA_TOKEN_URL",
+                         "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token")
+    req = urllib.request.Request(url, headers={"Metadata-Flavor": "Google"})
+    with urllib.request.urlopen(req, timeout=MIRROR_TIMEOUT) as r:
+        return json.loads(r.read().decode("utf-8"))["access_token"]
+
+
+def enqueue_mirror(ticket: str, s, o) -> str:
+    """試し書きの仕事を列に入れる。返り値は記録用の短い言葉（本文・合言葉は返さない）。どんな失敗でも例外を外に出さない"""
+    if not mirror_on():
+        return "off"
+    if not ticket:
+        return "skip:no_ticket"
+    if not isinstance(s, str) or not isinstance(o, str) or not s.strip() or not o.strip():
+        return "skip:empty"
+    for need in ("WRITER_URL", "MIRROR_QUEUE", "TASKS_INVOKER_SA", "WRITER_KEY"):
+        if not os.environ.get(need, "").strip():
+            return "skip:no_config"
+    if os.environ.get("MIRROR_HOMIS_ID", "2277808").strip() not in MIRROR_TEST_PATIENTS:
+        return "skip:not_test_patient"
+    try:
+        task = build_mirror_task(ticket, s, o)
+        base = os.environ.get("CLOUD_TASKS_BASE", "https://cloudtasks.googleapis.com/v2/")
+        url = base.rstrip("/") + "/" + mirror_queue() + "/tasks"
+        req = urllib.request.Request(url, data=json.dumps(task).encode("utf-8"), method="POST", headers={
+            "Authorization": "Bearer " + _access_token(), "Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=MIRROR_TIMEOUT):
+            return "queued"
+    except urllib.error.HTTPError as e:
+        return "duplicate" if e.code == 409 else f"error:http{e.code}"
+    except Exception as e:  # noqa: BLE001  通信の失敗・時間切れなど。本番（Tukusi への返事）は止めない
+        return "error:" + type(e).__name__
 _first_request_done = False
 
 
@@ -270,6 +353,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         record["json_ok"] = True
         record.update(summarize(body))
+        # v0.2.0: 試し書き（FAX_MIRROR=on のときだけ）。記録には結果の短い言葉だけ
+        record["mirror"] = enqueue_mirror(record.get("ticket", ""), body.get("s"), body.get("o"))
         del body, raw   # 本文はここで捨てる
         record["elapsed_ms"] = int((time.time() - t0) * 1000)
         log_line(record)

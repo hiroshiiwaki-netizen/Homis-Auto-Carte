@@ -31,13 +31,14 @@ FAX カルテの受け口（cloud_fax_receiver/・別の Cloud Run・仕様 `doc
 
 | ファイル | 版 | 最終更新 | 役割 |
 |---|---|---|---|
-| cloud_fax_receiver/server.py | 0.1.2 | 2026/10/26 | 段1: Tukusi WF1573 の横付けから受け取り、様子だけ記録（カルテは書かない）。未配置 |
+| cloud_fax_receiver/server.py | 0.2.0（未配置・本番は 0.1.2） | 2026/10/28 | 段1: Tukusi WF1573 の横付けから受け取り、様子だけ記録。0.2.0（段1b）: FAX_MIRROR=on のとき同じ中身をテスト舞子あての仕事として列 homis-fax-mirror に入れる |
 | tools/fax_shadow_reconcile.py | 0.1.3 | 2026/10/26 | 受け口のログと p281 の「カルテ順番札」を札番号で突き合わせる（読むだけ） |
 
 ### 0.2 改定履歴（新しい順）
 
 | 版 | 日付 | 主な変更 | 変えたファイル |
 |---|---|---|---|
+| 受け口 v0.2.0（未配置） | 2026/10/28 | 段1b 並走の試し書き（岩城さん 10/28「homis記録と並列にして、テスト舞子に記録し、ちゃんと書けているかみる」）。FAX_MIRROR=on のとき、受け取った件の S（先頭に「【GCP試し書き・本物は別の患者さん】」）と O を、テスト舞子あての fax_so の仕事（注文番号 FAX-MIRROR-<札番号>）として列 homis-fax-mirror に入れる。書き終わりは待たない・列に入れられなくても Tukusi には 200・宛先はテスト患者3人以外なら入れない。記録は mirror の言葉だけ。仕様 `docs/FAXカルテ_検討/SPEC_段1b_並走試し書き.md` | cloud_fax_receiver/server.py・tests/test_mirror.py（新） |
 | v3.1.3（未配置） | 2026/10/27 | FAX の型紙に「算定不要を押す」（岩城さん「FAX は 100% 算定不要」）・電話再診に verify_checked・部品に「id で探して押して印を確かめる」（同じ印が複数なら見えているものを選ぶ）。server.py は途中の手順の失敗を DX に知らせる文を型紙ごとに（FAX で「外来」と出ていた・黒ヤギ 1回目 指摘2）。レントゲンの型紙は変えない。テスト: test_checkbox_click.py 10件（本物の Chrome・型紙 fax_so.yaml を新規〜完了まで通す結合1件）＋ test_label_click 6件・test_phase1 24件すべて OK・わざと壊した9通りすべて赤。黒ヤギ 1回目【進めてよい】・指摘2・3 を直した。仕様 `docs/FAXカルテ_検討/SPEC_段2a_算定不要.md` | cloud/server.py・src/browser_actions.py・src/templates/fax_so.yaml・cloud/tests/test_checkbox_click.py（新）・cloud/tests/test_phase1.py |
 | 道具 v0.1.3 | 2026/10/26 | 黒ヤギ5回目（【進めてよい】・低3件）を反映: --since・--until の秒・時刻の省略を補う・読めない形は分かる言葉で止める・--p281 に渡すログの範囲を説明に。制御文字の対照表を仕様書10章に。受け口は 0.1.2 のまま | tools/fax_shadow_reconcile.py・tests/test_integration.py |
 | 受け口 v0.1.2 | 2026/10/26 | 黒ヤギ再レビュー（【進めてよい】・指摘3件）を反映: 道具の --since・--until を受け口のログにも（UTC → 日本時間・until は余裕300秒・時間帯の外で返された札は余りにしない）・受け口は制御文字の種類（ctrl_codes）も記録。大きすぎる本文は 413 でなく切断に見えることがある（仕様書10章に注意）。テスト: 単体24件＋結合3件＝26件・わざと壊した16通りすべて赤 | cloud_fax_receiver/server.py・tests/・tools/fax_shadow_reconcile.py |
