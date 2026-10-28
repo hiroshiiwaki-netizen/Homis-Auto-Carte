@@ -32,6 +32,7 @@ FAX カルテの受け口（cloud_fax_receiver/・別の Cloud Run・仕様 `doc
 | ファイル | 版 | 最終更新 | 役割 |
 |---|---|---|---|
 | cloud_fax_receiver/server.py | 0.2.0（未配置・本番は 0.1.2） | 2026/10/28 | 段1: Tukusi WF1573 の横付けから受け取り、様子だけ記録。0.2.0（段1b）: FAX_MIRROR=on のとき同じ中身をテスト舞子あての仕事として列 homis-fax-mirror に入れる |
+| tools/compare_fax_mirror.py | 0.1.0 | 2026/10/28 | 試し書き（テスト舞子）と Tukusi の本物のカルテを HOMIS の表示専用ページで読み、S・O が同じか比べる（読むだけ・結果は札番号の末尾と一致／不一致だけ） |
 | tools/fax_shadow_reconcile.py | 0.1.3 | 2026/10/26 | 受け口のログと p281 の「カルテ順番札」を札番号で突き合わせる（読むだけ） |
 
 ### 0.2 改定履歴（新しい順）
