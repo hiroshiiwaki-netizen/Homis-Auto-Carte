@@ -2,9 +2,22 @@
 """FAX カルテの受け口（横付けで受け取るだけ・段1）
 
 ==============================================================================
-バージョン: 0.2.0
-最終更新: 2026/10/28
+バージョン: 0.3.1
+最終更新: 2026/10/29
 改定履歴（新しい順・全体は docs/SPEC_v3_cloud.md 0章「モジュール別の版」）:
+  v0.3.1 10/29 患者さんの食い違いを止める（岩城さん 10/29「HOMISID だけ気をつけないと」）。homis_id（おひさまシステムで探した
+               1件目の患者ページ URL＝Tukusi が書く先）と homis_patient（OhiScanGo が FAX から決めた患者番号）を比べ、
+               記録に patient_check（same／mismatch／missing）を残す（どのモードでも）。live では same のときだけ書き、
+               mismatch・missing は書かずに知らせる（違う患者さんのカルテに書かないため）。
+               黒ヤギ 10/29 指摘: 全角数字は半角にそろえて半角だけ通す・先頭 0 の番号（0・0000000）は無効・URL は https://homis.jp/
+               で始まるものだけ読む・書く先が読めないときは unreadable（mismatch と分ける）。
+               黒ヤギ 10/29 再レビュー（【進めてよい】）: same のときだけ書く形に・URL 末尾の # を区切りに・URL の大文字小文字を問わない
+  v0.3.0 10/29 段3（本番の切り替え）: FAX_MODE＝off／mirror／live を足す（FAX_MIRROR=on は mirror と同じ・戻しやすさのため残す）。
+               live のときは、受け取った homis_id（患者ページの URL）から患者番号を取り出し、本物の患者さんあての仕事
+               （注文番号 FAX-<札>・型紙 fax_so・S/O そのまま）を列 LIVE_QUEUE（homis-fax-writer）に入れる。
+               仕事にできなかった（札なし・中身が空・患者番号が読めない・設定なし・列の失敗）ときは、現場用（FAX_FIELD_WEBHOOK）と
+               DX（DX_ALERT_WEBHOOK）に札番号と理由だけを知らせる（待ちは3秒まで・失敗しても Tukusi には必ず 200）。
+               仕様 docs/FAXカルテ_検討/SPEC_段3_本番切替.md v0.3
   v0.2.0 10/28 段1b 並走の試し書き: FAX_MIRROR=on のとき、受け取った件の S・O を、テスト舞子あての仕事として列 homis-fax-mirror に入れる
                （書き終わりは待たない・入れられなくても Tukusi には今まで通り 200）。記録に mirror（queued／off／skip／duplicate／error）だけ足す。
                仕様 docs/FAXカルテ_検討/SPEC_段1b_並走試し書き.md。黒ヤギ1回目の指摘2: 列の名前の前後の空白と「/」を取る
@@ -26,7 +39,8 @@ POST /fax/receive   横付けの受け口。合言葉（Bearer）→ 大きさ �
   - 合言葉が合うまで本文の中身は見ない（断るときは 256KB 以内なら読み捨ててから返事をする。切断で番号が伝わらないため）
   - 大きすぎる本文（256KB 超）・長さが無い本文は読まずに 413／411
   - 断った件は時刻と番号だけの短い1行
-  - 外へ送るのは、FAX_MIRROR=on のときの「列 homis-fax-mirror に仕事を入れる」だけ（書く先はテスト舞子に固定・v0.2.0）。
+  - 外へ送るのは、mirror のときの「列 homis-fax-mirror に仕事を入れる」（書く先はテスト舞子に固定・v0.2.0）と、
+    live のときの「列 homis-fax-writer に本物の患者さんあての仕事を入れる」「仕事にできなかった知らせ」だけ（v0.3.0）。
     off なら外へ何も送らない
 """
 from __future__ import annotations
@@ -41,10 +55,11 @@ import re
 import sys
 import threading
 import time
+import unicodedata
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "0.2.0"
+VERSION = "0.3.1"
 MAX_BODY = 256 * 1024          # 受け取る本文の上限（バイト）
 READ_TIMEOUT = 10.0            # 1回の読み込みを待つ上限（秒）。少しずつ送る相手で箱がふさがらないように
 LABEL_MAX = 40                 # source・doc_type・route を記録する最大の長さ
@@ -63,8 +78,16 @@ MIRROR_TIMEOUT = 5.0   # 列に入れる・トークンを取る ときの待ち
 MIRROR_TEST_PATIENTS = {"2277808", "2080376", "2196689"}
 
 
+def fax_mode() -> str:
+    """v0.3.0: off／mirror／live。FAX_MODE が無いときは、今までの FAX_MIRROR=on を mirror とみなす。知らない値は off（書かない側に倒す）"""
+    mode = os.environ.get("FAX_MODE", "").strip().lower()
+    if not mode:
+        return "mirror" if os.environ.get("FAX_MIRROR", "").strip().lower() == "on" else "off"
+    return mode if mode in ("off", "mirror", "live") else "off"
+
+
 def mirror_on() -> bool:
-    return os.environ.get("FAX_MIRROR", "").strip().lower() == "on"
+    return fax_mode() == "mirror"
 
 
 def mirror_queue() -> str:
@@ -74,18 +97,23 @@ def mirror_queue() -> str:
 
 def build_mirror_task(ticket: str, s: str, o: str) -> dict:
     """列に入れる仕事（Cloud Tasks の task）を作る。書く先は必ずテスト舞子（設定 MIRROR_HOMIS_ID・既定 2277808）"""
+    return _build_task(mirror_queue(), "FAX-MIRROR-" + ticket, os.environ.get("MIRROR_HOMIS_ID", "2277808").strip(),
+                       "テスト", MIRROR_MARK + s, o)
+
+
+def _build_task(queue: str, order_id: str, homis_id: str, patient_name: str, s: str, o: str) -> dict:
+    """ライターあての仕事（OIDC＋X-Writer-Key・型紙 fax_so）。試し書きと本番で同じ形"""
     writer = os.environ.get("WRITER_URL", "").rstrip("/")
-    order_id = "FAX-MIRROR-" + ticket
     payload = {
         "orderId": order_id,
-        "homisId": os.environ.get("MIRROR_HOMIS_ID", "2277808").strip(),
-        "patientName": "テスト",
+        "homisId": homis_id,
+        "patientName": patient_name,
         "template": "fax_so",
-        "sContent": MIRROR_MARK + s,
+        "sContent": s,
         "oContent": o,
     }
     return {"task": {
-        "name": mirror_queue() + "/tasks/" + order_id,
+        "name": queue + "/tasks/" + order_id,
         "httpRequest": {
             "url": writer + "/write",
             "httpMethod": "POST",
@@ -118,10 +146,14 @@ def enqueue_mirror(ticket: str, s, o) -> str:
             return "skip:no_config"
     if os.environ.get("MIRROR_HOMIS_ID", "2277808").strip() not in MIRROR_TEST_PATIENTS:
         return "skip:not_test_patient"
+    return _post_task(mirror_queue(), build_mirror_task(ticket, s, o))
+
+
+def _post_task(queue: str, task: dict) -> str:
+    """仕事を列に入れる。queued／duplicate（同じ名前＝同じ札の2回目）／error:…。例外は外に出さない"""
     try:
-        task = build_mirror_task(ticket, s, o)
         base = os.environ.get("CLOUD_TASKS_BASE", "https://cloudtasks.googleapis.com/v2/")
-        url = base.rstrip("/") + "/" + mirror_queue() + "/tasks"
+        url = base.rstrip("/") + "/" + queue + "/tasks"
         req = urllib.request.Request(url, data=json.dumps(task).encode("utf-8"), method="POST", headers={
             "Authorization": "Bearer " + _access_token(), "Content-Type": "application/json"})
         with urllib.request.urlopen(req, timeout=MIRROR_TIMEOUT):
@@ -130,6 +162,90 @@ def enqueue_mirror(ticket: str, s, o) -> str:
         return "duplicate" if e.code == 409 else f"error:http{e.code}"
     except Exception as e:  # noqa: BLE001  通信の失敗・時間切れなど。本番（Tukusi への返事）は止めない
         return "error:" + type(e).__name__
+
+
+# ---------- v0.3.0: 本番（FAX_MODE=live）。本物の患者さんあての仕事を列 homis-fax-writer に入れる ----------
+# 黒ヤギ 10/29: \d は全角数字にも合うので [0-9] にする。先頭 0（0・0000000）は患者番号として使わない
+LIVE_HOMIS_URL_RE = re.compile(r"[?&]patient_id=([1-9][0-9]{0,9})(?:[&#]|$)")   # 末尾の #… も区切り（再レビュー 指摘2）
+LIVE_HOMIS_NUM_RE = re.compile(r"^[1-9][0-9]{0,9}$")
+LIVE_HOMIS_URL_PREFIX = "https://homis.jp/"
+NOTIFY_TIMEOUT = 3.0   # 知らせの待ちの上限（秒）。Tukusi への返事を遅らせない（黒ヤギ 10/29 段3仕様 指摘4）
+LIVE_REASON_TEXT = {
+    "no_ticket": "札番号がありません",
+    "empty": "S か O が空です",
+    "bad_homis_id": "患者番号が読めません",
+    "no_config": "受け口の設定が足りません",
+    "id_mismatch": "患者さんが食い違っています（おひさまシステムと OhiScanGo）",
+    "id_missing": "OhiScanGo の患者番号が届いていません",
+}
+
+
+def patient_check(homis_raw, patient_raw) -> str:
+    """v0.3.1: 書く先（homis_id の患者番号）と OhiScanGo の患者番号が同じか。same／mismatch／missing（番号そのものは返さない）"""
+    a, b = extract_homis_id(homis_raw), extract_homis_id(patient_raw)
+    if not b:
+        return "missing"
+    if not a:
+        return "unreadable"   # 書く先が読めない（食い違いとは分けて記録する・黒ヤギ 10/29 指摘5）
+    return "same" if a == b else "mismatch"
+
+
+def live_queue() -> str:
+    return os.environ.get("LIVE_QUEUE", "").strip().strip("/")
+
+
+def extract_homis_id(value) -> str:
+    """患者ページの URL（…patient_id=2277808&p=5）か数字だけから、1〜10桁の患者番号を取り出す。読めなければ空"""
+    s = "" if value is None else unicodedata.normalize("NFKC", str(value)).strip()   # 全角の数字は半角にそろえる
+    if LIVE_HOMIS_NUM_RE.match(s):
+        return s
+    if not s.lower().startswith(LIVE_HOMIS_URL_PREFIX):   # HOMIS の URL の形だけを読む（文章の中は拾わない・大文字小文字は問わない）
+        return ""
+    m = LIVE_HOMIS_URL_RE.search(s)
+    return m.group(1) if m else ""
+
+
+def notify_live_failure(ticket: str, reason: str) -> None:
+    """仕事にできなかったことを、現場用と DX に知らせる。札番号と理由だけ（患者番号・本文は入れない）。例外は外に出さない"""
+    why = LIVE_REASON_TEXT.get(reason.split(":", 1)[0], reason)
+    text = (f"FAX のカルテを書けませんでした（受け口・{why}）。\n札 {ticket or '（なし）'}\n"
+            "白ヤギが札の記録から患者さんを確かめます。FAX の原本を見て、カルテを確かめてください。")
+    for name in ("FAX_FIELD_WEBHOOK", "DX_ALERT_WEBHOOK"):
+        hook = os.environ.get(name, "").strip()
+        if not hook:
+            continue
+        try:
+            req = urllib.request.Request(hook, data=json.dumps({"text": text}, ensure_ascii=False).encode("utf-8"),
+                                         method="POST", headers={"Content-Type": "application/json; charset=utf-8"})
+            with urllib.request.urlopen(req, timeout=NOTIFY_TIMEOUT):
+                pass
+        except Exception:  # noqa: BLE001  知らせの失敗で Tukusi への返事を壊さない
+            log_line({"event": "fax_live_notify_failed", "to": name, "ticket": ticket, "severity": "WARNING"})
+
+
+def enqueue_live(ticket: str, homis_raw, s, o, patient_raw=None) -> str:
+    """本物の患者さんあての仕事を列に入れる。返り値は記録用の短い言葉。入れられなかったときは知らせる"""
+    reason = ""
+    homis_id = extract_homis_id(homis_raw)
+    check = patient_check(homis_raw, patient_raw)
+    if not ticket:
+        reason = "no_ticket"
+    elif not isinstance(s, str) or not isinstance(o, str) or not s.strip() or not o.strip():
+        reason = "empty"
+    elif not homis_id:
+        reason = "bad_homis_id"
+    elif check != "same":
+        # same のときだけ書く（想定外の値でも書かない側に倒す・黒ヤギ 10/29 再レビュー 指摘1）
+        reason = "id_missing" if check == "missing" else "id_mismatch"
+    elif not all(os.environ.get(k, "").strip() for k in ("WRITER_URL", "LIVE_QUEUE", "TASKS_INVOKER_SA", "WRITER_KEY")):
+        reason = "no_config"
+    if reason:
+        notify_live_failure(ticket, reason)
+        return "skip:" + reason
+    word = _post_task(live_queue(), _build_task(live_queue(), "FAX-" + ticket, homis_id, "", s, o))
+    if word.startswith("error"):
+        notify_live_failure(ticket, word)
+    return word
 _first_request_done = False
 
 
@@ -353,8 +469,14 @@ class Handler(BaseHTTPRequestHandler):
             return
         record["json_ok"] = True
         record.update(summarize(body))
-        # v0.2.0: 試し書き（FAX_MIRROR=on のときだけ）。記録には結果の短い言葉だけ
+        # v0.2.0: 試し書き（mirror のときだけ）・v0.3.0: 本番（live のときだけ）。記録には結果の短い言葉だけ
+        mode = fax_mode()
+        record["mode"] = mode
+        record["patient_check"] = patient_check(body.get("homis_id"), body.get("homis_patient"))   # v0.3.1: どのモードでも記録
         record["mirror"] = enqueue_mirror(record.get("ticket", ""), body.get("s"), body.get("o"))
+        if mode == "live":
+            record["live"] = enqueue_live(record.get("ticket", ""), body.get("homis_id"), body.get("s"), body.get("o"),
+                                          body.get("homis_patient"))
         del body, raw   # 本文はここで捨てる
         record["elapsed_ms"] = int((time.time() - t0) * 1000)
         log_line(record)

@@ -19,7 +19,7 @@ RUN pip install --no-cache-dir -r requirements-cloud.txt
 
 COPY template_engine.py browser_actions.py clipboard_utils.py paths.py shared_log.py ./
 COPY templates ./templates
-COPY write_once.py server.py result_sheet.py navi_callback.py ./
+COPY write_once.py server.py result_sheet.py navi_callback.py verify_karte.py ./
 
 # 受け口（Service）。Job の手動試験は python write_once.py で上書き可能
 CMD ["python", "server.py"]

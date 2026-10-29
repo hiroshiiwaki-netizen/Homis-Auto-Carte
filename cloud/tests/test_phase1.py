@@ -23,6 +23,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 HERE = os.path.dirname(os.path.abspath(__file__))
 CLOUD = os.path.dirname(HERE)
 sys.path.insert(0, CLOUD)
+sys.path.insert(0, HERE)  # v3.2.0: 結合テストで test_verify_karte の偽の HOMIS を使う
 
 # --- server.py が読み込む重い部品を偽物にする（Chrome・共有ドライブに触らない） ---
 for name in ["selenium", "selenium.webdriver", "selenium.webdriver.chrome", "selenium.webdriver.chrome.options",
@@ -130,6 +131,11 @@ class Phase1(unittest.TestCase):
         self.httpd, self.base = start_server()
         self.next_result = {}
         server.write_karte = lambda data: dict(self.next_result, orderId=data.get("orderId"))
+        # v3.2.0: 読み直しは既定で偽物（本物の HOMIS を読みに行かない）。calls に呼ばれた型紙を覚える
+        self.verify_result = {"verdict": "ok", "status": "3", "reads": 1, "s_len": 1, "o_len": 1, "reason": ""}
+        self.verify_calls = []
+        server.verify_karte = types.SimpleNamespace(
+            verify=lambda *a: (self.verify_calls.append(a), dict(self.verify_result))[1])
 
     def tearDown(self):
         self.httpd.shutdown(); self.navi.close(); self.dx.close()
@@ -306,6 +312,122 @@ class Phase1(unittest.TestCase):
         out = ORIG_WRITE_KARTE(self.body(oid="GCP-T-OK"))
         self.assertEqual(out["failed_steps"], [])
         self.assertEqual(self.dx.calls, [])
+
+    # --- v3.2.0 書いたあとの読み直し ---
+    def fax(self, oid):
+        return self.body(oid=oid, template="fax_so", sContent="送り元", oContent="本文")
+
+    def test_s17_fax_not_completed_is_failure(self):
+        server._run_once = lambda data: {"success": True, "karte_url": "https://homis.jp/homic/?pid=patient_detail&patient_id=2277808&karte_id=95"}
+        self.verify_result.update(verdict="not_completed", status="1")
+        out = ORIG_WRITE_KARTE(self.fax("GCP-T-V1"))
+        self.assertEqual((out["success"], out["error_type"], out["verify"]), (False, "verify:not_completed", "not_completed"))
+        self.assertEqual(self.verify_calls[0][:2], ("2277808", "95"))
+        self.assertEqual(len(self.dx.calls), 1)
+        self.assertIn("完了", self.dx.calls[0]["text"])
+        self.assertIn("karte_id=95", self.dx.calls[0]["text"])
+
+    def test_s18_fax_unverified_stays_success_but_tells_dx(self):
+        server._run_once = lambda data: {"success": True, "karte_url": "https://homis.jp/homic/?pid=patient_detail&patient_id=2277808&karte_id=94"}
+        self.verify_result.update(verdict="unverified", status="", reason="URLError")
+        out = ORIG_WRITE_KARTE(self.fax("GCP-T-V2"))
+        self.assertEqual((out["success"], out["verify"]), (True, "unverified"))
+        self.assertEqual(len(self.dx.calls), 1)
+        self.assertIn("読み直し", self.dx.calls[0]["text"])
+
+    def test_s19_fax_ok_is_quiet(self):
+        server._run_once = lambda data: {"success": True, "karte_url": "https://homis.jp/homic/?pid=patient_detail&patient_id=2277808&karte_id=93"}
+        out = ORIG_WRITE_KARTE(self.fax("GCP-T-V3"))
+        self.assertEqual((out["success"], out["verify"]), (True, "ok"))
+        self.assertEqual(self.dx.calls, [])
+
+    def test_s20_xray_is_not_verified(self):
+        # レントゲンの型紙は今までどおり（読み直さない）
+        server._run_once = lambda data: {"success": True, "karte_url": "https://homis.jp/homic/?pid=patient_detail&patient_id=2277808&karte_id=92"}
+        out = ORIG_WRITE_KARTE(self.body(oid="GCP-T-V4"))
+        self.assertEqual((out["success"], out["verify"]), (True, ""))
+        self.assertEqual(self.verify_calls, [])
+
+    def test_s21_fax_failed_write_is_not_verified(self):
+        # カルテ番号が取れなかったときは読み直さない（今までどおりの失敗の扱い）
+        server._run_once = lambda data: {"success": False, "karte_url": "", "error_type": "timeout"}
+        ORIG_WRITE_KARTE(self.fax("GCP-T-V5"))
+        self.assertEqual(self.verify_calls, [])
+
+    # --- v3.3.0 本番の FAX が書けなかったときの現場への知らせ ---
+    def field_setup(self):
+        self.field = FakeNavi()
+        os.environ["FAX_FIELD_WEBHOOK"] = self.field.url
+        self.addCleanup(lambda: (self.field.close(), os.environ.pop("FAX_FIELD_WEBHOOK", None)))
+
+    def live(self, oid):
+        return self.body(oid=oid, template="fax_so", sContent="送り元", oContent="本文")
+
+    def test_f1_live_fax_failure_tells_field(self):
+        self.field_setup()
+        server._run_once = lambda data: {"success": False, "karte_url": "", "error_type": "timeout"}
+        ORIG_WRITE_KARTE(self.live("FAX-261029090000-1"))
+        self.assertEqual(len(self.field.calls), 1)
+        text = self.field.calls[0]["text"]
+        self.assertIn("注文番号 FAX-261029090000-1", text)
+        self.assertIn("patient_id=2277808", text)
+        self.assertNotIn("本文", text.split("\n")[0] + text.split("\n")[-1])  # S/O の中身は入れない
+
+    def test_f2_live_fax_verify_fail_tells_field(self):
+        self.field_setup()
+        server._run_once = lambda data: {"success": True, "karte_url": "https://homis.jp/homic/?pid=patient_detail&patient_id=2277808&karte_id=90"}
+        self.verify_result.update(verdict="not_completed", status="1")
+        out = ORIG_WRITE_KARTE(self.live("FAX-261029090000-2"))
+        self.assertFalse(out["success"])
+        self.assertEqual(len(self.field.calls), 1)
+        self.assertIn("保存が完了していません", self.field.calls[0]["text"])
+        self.assertIn("karte_id=90", self.field.calls[0]["text"])
+
+    def test_f3_mirror_failure_does_not_tell_field(self):
+        self.field_setup()
+        server._run_once = lambda data: {"success": False, "karte_url": "", "error_type": "timeout"}
+        ORIG_WRITE_KARTE(self.live("FAX-MIRROR-261029090000-3"))
+        self.assertEqual(self.field.calls, [])
+
+    def test_f4_live_fax_success_is_quiet(self):
+        self.field_setup()
+        server._run_once = lambda data: {"success": True, "karte_url": "https://homis.jp/homic/?pid=patient_detail&patient_id=2277808&karte_id=89"}
+        ORIG_WRITE_KARTE(self.live("FAX-261029090000-4"))
+        self.assertEqual(self.field.calls, [])
+
+    def test_f5_field_unset_does_not_break(self):
+        os.environ.pop("FAX_FIELD_WEBHOOK", None)
+        server._run_once = lambda data: {"success": False, "karte_url": "", "error_type": "timeout"}
+        out = ORIG_WRITE_KARTE(self.live("FAX-261029090000-5"))
+        self.assertFalse(out["success"])
+
+    def test_i1_http_write_with_real_verify_against_fake_homis(self):
+        # 結合: 受け口の HTTP（/write）→ 本物の write_karte → 本物の verify_karte → 偽の HOMIS（編集中のまま）→ 500・DX 1件
+        import verify_karte as real_verify
+        from test_verify_karte import FakeHomis, karte
+        homis = FakeHomis()
+        try:
+            real_verify.BASE = homis.url
+            real_verify.WAIT_SEC = 0
+            os.environ["HOMIS_USER"], os.environ["HOMIS_PASSWORD"] = "u", "p"
+            homis.karte_script = [karte(status="1", s="", o="")]
+            server.verify_karte = real_verify
+            server.write_karte = ORIG_WRITE_KARTE
+            server._run_once = lambda data: {"success": True, "karte_url": "https://homis.jp/homic/?pid=patient_detail&patient_id=2277808&karte_id=91"}
+            code, out = post(self.base + "/write", self.fax("GCP-T-I1"))
+            self.assertEqual((code, out["verify"], out["error_type"]), (500, "not_completed", "verify:not_completed"))
+            self.assertEqual(homis.reads, 2)
+            self.assertFalse(homis.edit_opened)
+            self.assertEqual(len(self.dx.calls), 1)
+            # 同じ道で、完了・一致なら 200 で DX は黙る
+            homis.karte_script = [karte(s="送り元", o="本文")]
+            homis.reads = 0
+            code, out = post(self.base + "/write", self.fax("GCP-T-I2"))
+            self.assertEqual((code, out["verify"]), (200, "ok"))
+            self.assertEqual(len(self.dx.calls), 1)
+        finally:
+            homis.close()
+            os.environ.pop("HOMIS_USER", None); os.environ.pop("HOMIS_PASSWORD", None)
 
     def test_s10_write_still_needs_key(self):
         code, _ = post(self.base + "/write", self.body(), key="wrong-k")

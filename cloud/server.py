@@ -2,9 +2,15 @@
 """Cloud Run 受け口（フェーズ2a＋失敗ガード）
 
 ==============================================================================
-バージョン: 3.1.3
-最終更新: 2026/10/27
+バージョン: 3.3.0
+最終更新: 2026/10/29
 改定履歴（新しい順・全体は docs/SPEC_v3_cloud.md 0章「モジュール別の版」）:
+  v3.3.0 10/29 段3: 本番の FAX（注文番号 FAX-…・試し書きの FAX-MIRROR-… は除く）が書けなかったとき（読み直しで合わない場合も）、
+               現場用のスペース（FAX_FIELD_WEBHOOK）にも直リンク付きで知らせる。DX への知らせは今まで通り。
+               仕様 docs/FAXカルテ_検討/SPEC_段3_本番切替.md 4章
+  v3.2.0 10/29 FAX（fax_so）は書いたあと HOMIS を読み直し（verify_karte.py）、完了か・S/O が送ったとおりかを確かめる。
+               合わなければ失敗（error_type verify:…）にして DX に直リンク付きで知らせる。読めなければ成功のまま DX に一言。
+               レントゲン・ボットの型紙は変えない
   v3.1.3 10/27 途中の手順の失敗を DX に知らせる文を型紙ごとに（FAX は「種別（電話再診）・算定不要の印」、レントゲンは今までどおり「外来」）。
                FAX の型紙 fax_so 1.1（算定不要）・押し方の部品 src/browser_actions.py v1.3.0 と一緒に配る
   v3.1.2 10/19 カルテ番号が取れても途中の手順が失敗していたら DX に知らせる（直リンク付き）。押し方の改善は src/browser_actions.py v1.2.0
@@ -43,6 +49,7 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 
 import navi_callback
+import verify_karte
 from browser_actions import BrowserActions
 from result_sheet import claim, enabled as sheet_enabled
 from result_sheet import finish, result_from_row
@@ -69,6 +76,22 @@ STEP_FAIL_HINT = {
     "xray_karte": "カルテの種別（外来）や中身",
     "fax_so": "カルテの種別（電話再診）・算定不要の印・S と O の中身",
     "bot_s_interrupt": "カルテの種別（電話再診）や S の中身",
+}
+
+# v3.2.0: 書いたあと読み直す型紙と、合わなかったときの DX への文
+VERIFY_TEMPLATES = {"fax_so"}
+VERIFY_TEXT = {
+    "not_completed": "カルテが「完了」になっていません",
+    "s_mismatch": "S が送った文と違います",
+    "o_mismatch": "O が送った文と違います",
+    "unverified": "書いたあとの読み直しができませんでした（書けていないとは限りません）",
+}
+
+# v3.3.0: 本番の FAX が書けなかったときの、現場用スペースへの文（理由の言葉）
+FIELD_REASON = {
+    "verify:not_completed": "保存が完了していません",
+    "verify:s_mismatch": "S が送った文と違います",
+    "verify:o_mismatch": "O が送った文と違います",
 }
 
 DX_EMPTY = {
@@ -176,6 +199,29 @@ def _notify_dx_empty(order_id: str, page_url: str, template: str) -> None:
         logger.error("DXエラーChat失敗 orderId=%s err=%s", order_id, type(e).__name__)
 
 
+def _is_live_fax(data: dict) -> bool:
+    """本番の FAX の注文か（試し書き FAX-MIRROR-… は現場に知らせない）"""
+    oid = str(data.get("orderId") or "")
+    return _template_name(data) == "fax_so" and oid.startswith("FAX-") and not oid.startswith("FAX-MIRROR-")
+
+
+def _notify_field(order_id: str, page_url: str, err: str) -> None:
+    """本番の FAX が書けなかったことを現場用スペースに知らせる。例外は外に出さない（書いた結果は必ず返す）"""
+    hook = os.environ.get("FAX_FIELD_WEBHOOK", "").strip()
+    if not hook:
+        logger.warning("FAX_FIELD_WEBHOOK 未設定 orderId=%s", order_id)
+        return
+    why = FIELD_REASON.get(err, f"書き込みに失敗しました（{err or '理由不明'}）")
+    text = f"FAX のカルテを書けませんでした（{why}）。HOMIS でカルテを確かめ、無ければ FAX の原本から書いてください。\n{page_url}\n注文番号 {order_id}"
+    body = json.dumps({"text": text}, ensure_ascii=False).encode("utf-8")
+    req = urllib.request.Request(hook, data=body, headers={"Content-Type": "application/json; charset=utf-8"}, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            logger.info("現場への知らせ status=%s orderId=%s", resp.status, order_id)
+    except Exception as e:  # noqa: BLE001
+        logger.error("現場への知らせ失敗 orderId=%s err=%s", order_id, type(e).__name__)
+
+
 def _run_once(data: dict) -> dict:
     user = os.environ.get("HOMIS_USER", "")
     password = os.environ.get("HOMIS_PASSWORD", "")
@@ -240,8 +286,26 @@ def write_karte(data: dict) -> dict:
             err = err or "opened_then_fail"
     url = result.get("karte_url") or ""
     kid = extract_karte_id(url)
+    checked = None
+    if _template_name(data) in VERIFY_TEMPLATES and result.get("success") and kid:
+        # v3.2.0: カルテ番号が取れても、保存されたとは限らない（10/23〜28 Tukusi で7件が空のまま成功扱い）。読み直して確かめる
+        checked = verify_karte.verify(homis_id, kid, str(data.get("sContent") or ""), str(data.get("oContent") or ""))
+        logger.info("読み直し orderId=%s verdict=%s status=%s reads=%s s_len=%s o_len=%s reason=%s", order_id,
+                    checked["verdict"], checked["status"], checked["reads"], checked["s_len"], checked["o_len"], checked["reason"])
+        if checked["verdict"] != "ok":
+            navi_callback.notify_dx(
+                "HOMIS ライター（GCP）: " + VERIFY_TEXT.get(checked["verdict"], checked["verdict"])
+                + f"（状態 {checked.get('status_label') or checked['status'] or '－'}）。HOMIS でカルテを確かめてください。"
+                + f"\n{_patient_url(homis_id, url)}\norderId={order_id}",
+                order_id,
+            )
+        if checked["verdict"] in ("not_completed", "s_mismatch", "o_mismatch"):
+            result["success"] = False
+            err = "verify:" + checked["verdict"]
     total = time.time() - t0
     log_result(order_id, bool(result.get("success")), kid, err, total)
+    if _is_live_fax(data) and not result.get("success"):
+        _notify_field(order_id, _patient_url(homis_id, url), err)
     if _should_notify_dx(opened, kid, err):
         _notify_dx_empty(order_id, _patient_url(homis_id, url), _template_name(data))
     failed_steps = [str(s) for s in (result.get("failed_steps") or [])]
@@ -270,6 +334,7 @@ def write_karte(data: dict) -> dict:
         "karte_id": kid,
         "karte_url": url,
         "failed_steps": failed_steps,
+        "verify": checked["verdict"] if checked else "",
     }
 
 

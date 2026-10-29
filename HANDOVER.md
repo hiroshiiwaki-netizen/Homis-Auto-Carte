@@ -1,7 +1,9 @@
 # Homis自動カルテ生成 引継ぎ書
 
-> **最終更新**: 2026-10-19 18:15
-> **バージョン**: v2.1.3 GUI / Watchdog v2.1.4 / Cloud Run `:v5` / 仕様 v0.19
+> **最終更新**: 2026-10-29 17:35
+> **バージョン**: v2.1.3 GUI / Watchdog v2.1.4 / ライター Cloud Run v3.3.0（`:v11`・リビジョン 00016-stc）/ FAX 受け口 v0.3.1（00006-lsl）/ 仕様 SPEC_v3_cloud.md 0章が台帳
+> **2026-10-29 FAX カルテ段3の準備が完了・本番切り替えは 11/2（月）9時**: ライター 3.2.0 で「書いたあと読み直す」（verify_karte.py・完了か・S/O が送ったとおりか・合わなければ失敗にして DX へ）、3.3.0 で本番の FAX の失敗を「カルテ失敗」スペースにも（Secret `fax-field-chat-webhook`）。受け口 0.3.0 で FAX_MODE（off／mirror／live）・0.3.1 で「おひさまシステムの患者」と「OhiScanGo の患者」の照合（same のときだけ書く）。列 `homis-fax-writer`（maxAttempts=1・同時1）を新設。今は FAX_MIRROR=on＝練習（テスト舞子だけに書く）。入れ直しの道具 tools\fax_requeue.py・空のカルテを探す道具 tools\find_stuck_kartes.py。詳細と当日の1行は docs\FAXカルテ_検討\SPEC_段3_本番切替.md 10c と HANDOVER_FAXカルテ.md
+> **2026-10-28 FAX 段1b 並走の試し書きを開始**（受け口 0.2.0・列 homis-fax-mirror）。10/28〜29 で約90件すべて書けた・本物と照合できた分は S/O 一致
 > **ステータス**: 🟢 **10/15 17時 レントゲンのカルテ書き込みを GCP（Cloud Tasks＋Cloud Run v3.1.1）へ切り替え**。垂水 Python v2.1.3 は往診のため稼働中。戻すときは値だけ変えない（下の表）
 > **2026-10-26 FAX のカルテを GCP へ移す検討を始める**（岩城さん・別スレッド）: 引継書は docs\FAXカルテ_検討\HANDOVER_FAXカルテ.md（Google ドライブだけに置く・公開リポジトリには入れない）。現場の要望「算定不要にチェック」もそこに
 > **2026-10-26 18:00 FAX 段1 の受け口を GCP に置いた**: Cloud Run `homis-fax-receiver`（v0.1.2・リビジョン 00001-dnm・誰でも届き中で合言葉・カルテは書かない・様子だけ記録）。専用アカウント `fax-receiver`・Secret `fax-receiver-key`（版2）・像は置き場 `homis-karte-writer` に `homis-fax-receiver:v0.1.2`。ソース `cloud_fax_receiver\`・突き合わせ `tools\fax_shadow_reconcile.py` v0.1.3。黒ヤギ6回【進めてよい】・テスト26件・security-check 問題なし。段0 は a・b・d・e 合格、残り c。本番 WF1573 には未接続。今のライター `homis-karte-writer` は触っていない

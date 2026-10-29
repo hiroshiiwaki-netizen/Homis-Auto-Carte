@@ -18,7 +18,8 @@
 
 | ファイル | 版 | 最終更新 | 役割 |
 |---|---|---|---|
-| server.py | 3.1.3（未配置・本番は 3.1.2） | 2026/10/27 | 受け口（/health・/write・/check-group）・失敗ガード。3.1.3: 途中の手順の失敗を DX に知らせる文を型紙ごとに |
+| server.py | 3.3.0（未配置・本番は 3.2.0） | 2026/10/29 | 受け口（/health・/write・/check-group）・失敗ガード。3.1.3: 途中の手順の失敗を DX に知らせる文を型紙ごとに。3.2.0: FAX は書いたあと読み直して確かめる（合わなければ失敗・DX へ）。3.3.0: 本番の FAX（FAX-…）が書けなかったら現場用スペースにも |
+| verify_karte.py | 1.0.1（本番 00014-n7z） | 2026/10/29 | 書いたカルテを別のログインで ajax_karte_show（読むだけ）から読み直し、完了（状態 3・5・6・7）か・S/O が送ったとおりかを返す。編集画面は開かない |
 | navi_callback.py | 3.1.0 | 2026/10/15 | ナビの doPost への知らせ（再送・DX Chat） |
 | result_sheet.py | 3.0.0 | 2026/09/08 | 結果シート（orderId の二重を断る）。先頭の版は次に直すときに書く |
 | write_once.py | 3.0.0 | 2026/09/04 |
@@ -31,14 +32,22 @@ FAX カルテの受け口（cloud_fax_receiver/・別の Cloud Run・仕様 `doc
 
 | ファイル | 版 | 最終更新 | 役割 |
 |---|---|---|---|
-| cloud_fax_receiver/server.py | 0.2.0（未配置・本番は 0.1.2） | 2026/10/28 | 段1: Tukusi WF1573 の横付けから受け取り、様子だけ記録。0.2.0（段1b）: FAX_MIRROR=on のとき同じ中身をテスト舞子あての仕事として列 homis-fax-mirror に入れる |
+| cloud_fax_receiver/server.py | 0.3.1（未配置・本番は 0.3.0＝00005-msd） | 2026/10/29 | 段1: Tukusi WF1573 の横付けから受け取り、様子だけ記録。0.2.0（段1b）: FAX_MIRROR=on のとき同じ中身をテスト舞子あての仕事として列 homis-fax-mirror に入れる。0.3.0（段3）: FAX_MODE＝off／mirror／live。live は本物の患者さんあての仕事を列 homis-fax-writer へ・仕事にできなければ現場と DX に知らせる |
+| tools/fax_requeue.py | 0.1.1 | 2026/10/29 | 段3 の切り替えの間に来た FAX を、札番号→p281 の札の記録で患者さん→試し書きの S・O→本物に同じものが無いのを見てから列に入れる（既定は見るだけ・--go で入れる） |
 | tools/compare_fax_mirror.py | 0.1.0 | 2026/10/28 | 試し書き（テスト舞子）と Tukusi の本物のカルテを HOMIS の表示専用ページで読み、S・O が同じか比べる（読むだけ・結果は札番号の末尾と一致／不一致だけ） |
 | tools/fax_shadow_reconcile.py | 0.1.3 | 2026/10/26 | 受け口のログと p281 の「カルテ順番札」を札番号で突き合わせる（読むだけ） |
+| tools/find_stuck_kartes.py | 0.1.0 | 2026/10/29 | Tukusi が開いたまま保存できずに残った「空のカルテ」（S も O も空・状態 編集中／中断／完了）を、p281 の札と HOMIS の ajax_karte_show で探す（読むだけ・番号は --ids のときだけ） |
 
 ### 0.2 改定履歴（新しい順）
 
 | 版 | 日付 | 主な変更 | 変えたファイル |
 |---|---|---|---|
+| 受け口 v0.3.1（未配置） | 2026/10/29 | 患者さんの食い違いを止める（岩城さん 10/29「上からわたる変数なので、HOMISID だけきをつけないと」）。Tukusi が書く先の homis_id（おひさまシステムで探した1件目＝data[0] の患者ページ URL）と、homis_patient（OhiScanGo が FAX から決めた番号・Tukusi の変数 homis患者）を比べ、patient_check（same／mismatch／missing）をどのモードでも記録。live は same のときだけ書き、mismatch・missing は書かずに現場と DX に知らせる（番号は出さない）。Tukusi のボディに "homis_patient" を足してもらう（10/29 済み）。黒ヤギ1回目【直してから】を全部反映: 全角数字は NFKC で半角にそろえて [0-9] だけ通す（\d は全角にも合う）・先頭 0 の番号は無効・URL は https://homis.jp/ で始まるものだけ読む・書く先が読めないときは unreadable・テストのファイルを閉じる。テスト: test_live.py 18件（新6）・test_receiver 23件・test_integration 3件・test_mirror 9件 OK・わざと壊した6通りすべて赤。黒ヤギ再レビュー【進めてよい】の3点も反映: same のときだけ書く形（想定外の値でも書かない）・URL 末尾の # を区切りに・URL の大文字小文字を問わない（test_live.py 19件 OK） | cloud_fax_receiver/server.py・cloud_fax_receiver/tests/test_live.py |
+| 道具 fax_requeue v0.1.1 | 2026/10/29 | 黒ヤギ段3実装レビュー【進めてよい】。取り入れた: 道具のファイルを with で閉じる（指摘1）・動かす人の権限（Secret 読み取り・列への投入）を切り替えの確認の一覧へ（指摘2）・401/503 で弾かれた件は切り替え直後の目視と毎時の「列に入ったのにライターの結果が無い」で拾う（指摘3）。取り入れなかった: Tukusi への返事の mode を live にする（指摘4・切り替えの前後で Tukusi の画面の返事を変えない。モードは受け口の記録にある） | tools/fax_requeue.py |
+| 段3 受け口 v0.3.0・ライター v3.3.0・道具 fax_requeue v0.1.0（未配置） | 2026/10/29 | 段3（本番の切り替え）の実装（岩城さん 10/29「すすめてください」・仕様 docs/FAXカルテ_検討/SPEC_段3_本番切替.md v0.3・黒ヤギ仕様レビュー2回目【進めてよい】）。受け口: FAX_MODE（FAX_MIRROR=on は mirror 扱い・知らない値は off）・live は homis_id から [?&]patient_id=(\d{1,10}) か数字だけを取り、注文番号 FAX-<札>・S/O そのままで列 LIVE_QUEUE へ。札なし・空・患者番号が読めない・設定なし・列の失敗は FAX_FIELD_WEBHOOK と DX_ALERT_WEBHOOK に札番号と理由だけ（3秒まで・Tukusi には必ず 200）。ライター: 本物の FAX が失敗（読み直しで合わない場合も）したら FAX_FIELD_WEBHOOK に直リンク・注文番号・理由。道具: 入れ直し（見るだけ／--go）。テスト: 受け口 test_live.py 12件（新）・test_receiver 23件・test_integration 3件・test_mirror 9件、ライター test_phase1.py 35件（新5）・test_verify_karte 17件 すべて OK。道具は本物で見るだけを試した（同じ中身あり→入れない・上書きされた札→入れてよい・無い札→記録に無い）・仕事の形は受け口と同じ | cloud_fax_receiver/server.py・cloud_fax_receiver/tests/test_live.py（新）・cloud/server.py・cloud/tests/test_phase1.py・tools/fax_requeue.py（新） |
+| verify_karte v1.0.1（本番 v3.2.0 で配置済み） | 2026/10/29 | 黒ヤギ1回目【直してから】を反映。取り入れた: 読めなかった理由に例外の文も（80字まで・指摘3）、ログイン後も auth.php のままなら login_failed（指摘4）。取り入れなかった: 記号の実体参照を戻す（指摘1・HOMIS はそのまま返す＝試し書き122欄で実体参照0件、記号入りの本物2件も ok）。指摘2（500 でやり直して二重に書く）はコードを変えず、**FAX の列は maxAttempts=1（やり直しなし）を必須**とする（homis-fax-mirror は maxAttempts=1 を確認・ライターは結果シートで同じ注文番号を二度書かない）。テスト: test_verify_karte.py 17件・test_phase1.py 30件 OK。本物（読むだけ）: 今日の照合できる30件すべて ok・O を1字変えると30件すべて o_mismatch | cloud/verify_karte.py・cloud/tests/test_verify_karte.py |
+| v3.2.0（10/29 14:53 配置・00014-n7z・像 v10・最初の読み直し 15:06 ok） | 2026/10/29 | 書いたあとの読み直し（岩城さん 10/29「実装しておきましょう」「法人内で空だとか書けてないとかうるさい」）。FAX（fax_so）だけ、カルテ番号が取れたら verify_karte.verify で ①完了か ②S・O が送ったとおりか（改行の種類・行末の空白は見ない）を確かめる。完了でなければ2秒後に1回だけ読み直す。合わなければ success=false・error_type verify:not_completed／s_mismatch／o_mismatch・DX に直リンクと画面の状態の言葉で知らせる。読めなければ成功のまま DX に一言（verify=unverified）。レントゲン・ボットは変えない。状態の対応（本物で確認）: 0 取消・1 診察中・2 診療中断・3 診察完了・5 ORCA送信済・6 ORCA登録済・7 ORCA登録不要（算定不要で書くとこれ）・70 ORCA登録不要(編集中)。テスト: test_verify_karte.py 15件（偽の HOMIS）・test_phase1.py 30件（うち新規6・結合1件＝受け口の HTTP→本物の write_karte→本物の verify_karte→偽の HOMIS）すべて OK・わざと壊した7通りすべて赤。本物の HOMIS（読むだけ）: 試し書き3件 ok・O を1字変えると o_mismatch・編集中の空のカルテは not_completed | cloud/server.py・cloud/verify_karte.py（新）・cloud/Dockerfile・cloud/prepare_cloud_build.ps1・cloud/tests/test_verify_karte.py（新）・cloud/tests/test_phase1.py |
+| 道具 find_stuck_kartes v0.1.0 | 2026/10/29 | 10/28 の照合で「本物のカルテが空」が見つかったので新規。10/1〜10/29 を数えて 10/23〜10/28 の7件（中断4・編集中3）だけが見つかることを確かめた（10/6〜10/22 は札 507 枚で0件） | tools/find_stuck_kartes.py（新） |
 | 受け口 v0.2.0（未配置） | 2026/10/28 | 段1b 並走の試し書き（岩城さん 10/28「homis記録と並列にして、テスト舞子に記録し、ちゃんと書けているかみる」）。FAX_MIRROR=on のとき、受け取った件の S（先頭に「【GCP試し書き・本物は別の患者さん】」）と O を、テスト舞子あての fax_so の仕事（注文番号 FAX-MIRROR-<札番号>）として列 homis-fax-mirror に入れる。書き終わりは待たない・列に入れられなくても Tukusi には 200・宛先はテスト患者3人以外なら入れない。記録は mirror の言葉だけ。仕様 `docs/FAXカルテ_検討/SPEC_段1b_並走試し書き.md` | cloud_fax_receiver/server.py・tests/test_mirror.py（新） |
 | v3.1.3（未配置） | 2026/10/27 | FAX の型紙に「算定不要を押す」（岩城さん「FAX は 100% 算定不要」）・電話再診に verify_checked・部品に「id で探して押して印を確かめる」（同じ印が複数なら見えているものを選ぶ）。server.py は途中の手順の失敗を DX に知らせる文を型紙ごとに（FAX で「外来」と出ていた・黒ヤギ 1回目 指摘2）。レントゲンの型紙は変えない。テスト: test_checkbox_click.py 10件（本物の Chrome・型紙 fax_so.yaml を新規〜完了まで通す結合1件）＋ test_label_click 6件・test_phase1 24件すべて OK・わざと壊した9通りすべて赤。黒ヤギ 1回目【進めてよい】・指摘2・3 を直した。仕様 `docs/FAXカルテ_検討/SPEC_段2a_算定不要.md` | cloud/server.py・src/browser_actions.py・src/templates/fax_so.yaml・cloud/tests/test_checkbox_click.py（新）・cloud/tests/test_phase1.py |
 | 道具 v0.1.3 | 2026/10/26 | 黒ヤギ5回目（【進めてよい】・低3件）を反映: --since・--until の秒・時刻の省略を補う・読めない形は分かる言葉で止める・--p281 に渡すログの範囲を説明に。制御文字の対照表を仕様書10章に。受け口は 0.1.2 のまま | tools/fax_shadow_reconcile.py・tests/test_integration.py |
