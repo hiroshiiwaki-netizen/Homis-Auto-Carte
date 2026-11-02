@@ -18,8 +18,8 @@
 
 | ファイル | 版 | 最終更新 | 役割 |
 |---|---|---|---|
-| server.py | 3.3.0（未配置・本番は 3.2.0） | 2026/10/29 | 受け口（/health・/write・/check-group）・失敗ガード。3.1.3: 途中の手順の失敗を DX に知らせる文を型紙ごとに。3.2.0: FAX は書いたあと読み直して確かめる（合わなければ失敗・DX へ）。3.3.0: 本番の FAX（FAX-…）が書けなかったら現場用スペースにも |
-| verify_karte.py | 1.0.1（本番 00014-n7z） | 2026/10/29 | 書いたカルテを別のログインで ajax_karte_show（読むだけ）から読み直し、完了（状態 3・5・6・7）か・S/O が送ったとおりかを返す。編集画面は開かない |
+| server.py | 3.5.0（本番 00019-4f4・v13＝11/2 17:05。S が空なら半角スペースの直しは v14・未配置） | 2026/11/02 | 受け口（/health・/write・/check-group）・失敗ガード。3.1.3: 途中の手順の失敗を DX に知らせる文を型紙ごとに。3.2.0: FAX は書いたあと読み直して確かめる（合わなければ失敗・DX へ）。3.3.0: 本番の FAX（FAX-…）が書けなかったら現場用スペースにも。3.4.0: 新規が開かなければ止める。3.5.0: 問い合わせ（BOT-…・中断）を読み直し・現場の知らせを型紙ごとに |
+| verify_karte.py | 1.1.0（本番 00019-4f4・v13。名前の空白をそろえる直しは v14・未配置） | 2026/11/02 | 書いたカルテを別のログインで ajax_karte_show（読むだけ）から読み直し、完了（状態 3・5・6・7）か・S/O が送ったとおりかを返す。編集画面は開かない。1.1.0: 問い合わせは中断・更新者がライター自身を合格の条件に |
 | navi_callback.py | 3.1.0 | 2026/10/15 | ナビの doPost への知らせ（再送・DX Chat） |
 | result_sheet.py | 3.0.0 | 2026/09/08 | 結果シート（orderId の二重を断る）。先頭の版は次に直すときに書く |
 | write_once.py | 3.0.0 | 2026/09/04 |
@@ -32,7 +32,7 @@ FAX カルテの受け口（cloud_fax_receiver/・別の Cloud Run・仕様 `doc
 
 | ファイル | 版 | 最終更新 | 役割 |
 |---|---|---|---|
-| cloud_fax_receiver/server.py | 0.3.1（未配置・本番は 0.3.0＝00005-msd） | 2026/10/29 | 段1: Tukusi WF1573 の横付けから受け取り、様子だけ記録。0.2.0（段1b）: FAX_MIRROR=on のとき同じ中身をテスト舞子あての仕事として列 homis-fax-mirror に入れる。0.3.0（段3）: FAX_MODE＝off／mirror／live。live は本物の患者さんあての仕事を列 homis-fax-writer へ・仕事にできなければ現場と DX に知らせる |
+| cloud_fax_receiver/server.py | 0.4.0（未配置・本番は 0.3.1＝00007-w27） | 2026/11/02 | 段1: Tukusi WF1573 の横付けから受け取り、様子だけ記録。0.2.0（段1b）: FAX_MIRROR=on のとき同じ中身をテスト舞子あての仕事として列 homis-fax-mirror に入れる。0.3.0（段3）: FAX_MODE＝off／mirror／live。live は本物の患者さんあての仕事を列 homis-fax-writer へ・仕事にできなければ現場と DX に知らせる。0.4.0: 問い合わせの口 /bot/receive（BOT_MODE＝off／test／live・既定 off） |
 | tools/fax_requeue.py | 0.1.1 | 2026/10/29 | 段3 の切り替えの間に来た FAX を、札番号→p281 の札の記録で患者さん→試し書きの S・O→本物に同じものが無いのを見てから列に入れる（既定は見るだけ・--go で入れる） |
 | tools/compare_fax_mirror.py | 0.1.0 | 2026/10/28 | 試し書き（テスト舞子）と Tukusi の本物のカルテを HOMIS の表示専用ページで読み、S・O が同じか比べる（読むだけ・結果は札番号の末尾と一致／不一致だけ） |
 | tools/fax_shadow_reconcile.py | 0.1.3 | 2026/10/26 | 受け口のログと p281 の「カルテ順番札」を札番号で突き合わせる（読むだけ） |
@@ -42,6 +42,8 @@ FAX カルテの受け口（cloud_fax_receiver/・別の Cloud Run・仕様 `doc
 
 | 版 | 日付 | 主な変更 | 変えたファイル |
 |---|---|---|---|
+| v3.5.0 ほか（未配置） | 2026/11/02 | 問い合わせ（OhisamaBot → Tukusi WF1133）をライターで書く準備（仕様 docs/FAXカルテ_検討/SPEC_問い合わせ_ライター移行_v0.md v0.3）。受け口 0.4.0: /bot/receive（合言葉 BOT_RECEIVER_KEY・BOT_MODE 既定 off・注文番号 BOT-<番号>-<送った時刻14桁>・homis_url と homis_id を照合して same だけ・型紙 bot_s_interrupt）。ライター 3.5.0: 問い合わせも読み直す・カルテ番号なしは失敗・現場の知らせを型紙ごと（BOT_FIELD_WEBHOOK）。verify_karte 1.1.0: expect=interrupt。FAX は S（発信元）が空でも書く（HOMIS は空の S だと完了で保存しない＝テスト舞子で編集中のまま残った→ 空なら半角スペース1つ。半角・全角とも完了まで保存できることを確認・DX担当「半角スペースを入れて」）。黒ヤギ実装1回目【進めてよい】の指摘1（名前の空白）・3（時刻の先頭14桁）を直した | cloud_fax_receiver/server.py・cloud/server.py・cloud/verify_karte.py・各テスト |
+| v3.4.0（11/2 15:40 配置 00017-sxz・v12。黒ヤギ再レビュー【進めてよい】。テスト舞子で試し書き1件 OK→取消。次の宿題: レントゲンの遅い知らせ・知らない知らせの文を伏せて残す） | 2026/11/02 | 11/2 11:36 本番の FAX 1件で、「新規」を押すと HOMIS が「入力途中のカルテが存在します」と出し（その日の訪問の予定のカルテが中断であった患者）、ライターは気づかず進んで完了で失敗・成功扱いで現場に知らせが出なかった（DX担当「直してください」）。直し: 新規を押した直後の知らせを見て（2秒まで）この文なら閉じて止め、以後の手順（S・O・完了）を一切しない（BrowserActions.execute_action を差し替えて飛ばす）。失敗 error_type=blocked:in_progress_karte・DX に「何も書かずに止めた」・本番の FAX は「カルテ失敗」にも。FAX（fax_so）でカルテ番号が取れなければ必ず失敗（no_karte_id）。レントゲンは変えない。テスト: test_phase1.py 41件（新6）・test_verify_karte 17件 OK・わざと壊した4通りすべて赤。黒ヤギ 1回目【直してから】5点を直す: ①FAX の戻し方は Tukusi への送り直し（tukusi_resend・新しい札）を案内し fax_requeue は案内しない（同じ注文番号は二重よけで弾かれ・live では本文が試し書きにしか無い）②DX の文は型紙ごと（レントゲンは送り元から送り直すか手で）③編集タブの「完了」ボタンが見えたら2秒待たずに進む ④新規のあとの知らせはどんな文でも止める（blocked:unexpected_alert・文はログに出さない）⑤止めたら karte_opened を戻す。test_phase1 43件 OK・わざと壊した9通りすべて赤 | cloud/server.py・cloud/tests/test_phase1.py |
 | 受け口 v0.3.1（未配置） | 2026/10/29 | 患者さんの食い違いを止める（岩城さん 10/29「上からわたる変数なので、HOMISID だけきをつけないと」）。Tukusi が書く先の homis_id（おひさまシステムで探した1件目＝data[0] の患者ページ URL）と、homis_patient（OhiScanGo が FAX から決めた番号・Tukusi の変数 homis患者）を比べ、patient_check（same／mismatch／missing）をどのモードでも記録。live は same のときだけ書き、mismatch・missing は書かずに現場と DX に知らせる（番号は出さない）。Tukusi のボディに "homis_patient" を足してもらう（10/29 済み）。黒ヤギ1回目【直してから】を全部反映: 全角数字は NFKC で半角にそろえて [0-9] だけ通す（\d は全角にも合う）・先頭 0 の番号は無効・URL は https://homis.jp/ で始まるものだけ読む・書く先が読めないときは unreadable・テストのファイルを閉じる。テスト: test_live.py 18件（新6）・test_receiver 23件・test_integration 3件・test_mirror 9件 OK・わざと壊した6通りすべて赤。黒ヤギ再レビュー【進めてよい】の3点も反映: same のときだけ書く形（想定外の値でも書かない）・URL 末尾の # を区切りに・URL の大文字小文字を問わない（test_live.py 19件 OK） | cloud_fax_receiver/server.py・cloud_fax_receiver/tests/test_live.py |
 | 道具 fax_requeue v0.1.1 | 2026/10/29 | 黒ヤギ段3実装レビュー【進めてよい】。取り入れた: 道具のファイルを with で閉じる（指摘1）・動かす人の権限（Secret 読み取り・列への投入）を切り替えの確認の一覧へ（指摘2）・401/503 で弾かれた件は切り替え直後の目視と毎時の「列に入ったのにライターの結果が無い」で拾う（指摘3）。取り入れなかった: Tukusi への返事の mode を live にする（指摘4・切り替えの前後で Tukusi の画面の返事を変えない。モードは受け口の記録にある） | tools/fax_requeue.py |
 | 段3 受け口 v0.3.0・ライター v3.3.0・道具 fax_requeue v0.1.0（未配置） | 2026/10/29 | 段3（本番の切り替え）の実装（岩城さん 10/29「すすめてください」・仕様 docs/FAXカルテ_検討/SPEC_段3_本番切替.md v0.3・黒ヤギ仕様レビュー2回目【進めてよい】）。受け口: FAX_MODE（FAX_MIRROR=on は mirror 扱い・知らない値は off）・live は homis_id から [?&]patient_id=(\d{1,10}) か数字だけを取り、注文番号 FAX-<札>・S/O そのままで列 LIVE_QUEUE へ。札なし・空・患者番号が読めない・設定なし・列の失敗は FAX_FIELD_WEBHOOK と DX_ALERT_WEBHOOK に札番号と理由だけ（3秒まで・Tukusi には必ず 200）。ライター: 本物の FAX が失敗（読み直しで合わない場合も）したら FAX_FIELD_WEBHOOK に直リンク・注文番号・理由。道具: 入れ直し（見るだけ／--go）。テスト: 受け口 test_live.py 12件（新）・test_receiver 23件・test_integration 3件・test_mirror 9件、ライター test_phase1.py 35件（新5）・test_verify_karte 17件 すべて OK。道具は本物で見るだけを試した（同じ中身あり→入れない・上書きされた札→入れてよい・無い札→記録に無い）・仕事の形は受け口と同じ | cloud_fax_receiver/server.py・cloud_fax_receiver/tests/test_live.py（新）・cloud/server.py・cloud/tests/test_phase1.py・tools/fax_requeue.py（新） |
@@ -76,6 +78,9 @@ FAX カルテの受け口（cloud_fax_receiver/・別の Cloud Run・仕様 `doc
 
 | イメージ | 日付 | 版 | 中身 |
 |---|---|---|---|
+| `:v14` | （未配置・11/2 17:20 ビルド） | v3.5.0＋直し | S が空の FAX は半角スペース1つで書く・更新者の名前の空白をそろえる。黒ヤギ再レビュー待ち。受け口 0.4.0 より先に置く |
+| `:v13` | 2026/11/02 17:05 | v3.5.0 | 問い合わせ（bot_s_interrupt）の読み直し・知らせを型紙ごと・FAX の S 空を受ける。リビジョン 00019-4f4（同じ行を2回実行し 00018-dfc も同じ中身）。DX担当が配置 |
+| `:v12` | 2026/11/02 15:40 | v3.4.0 | 新規が開かなければ止める。リビジョン 00017-sxz。黒ヤギ再レビュー【進めてよい】。テスト舞子で試し書き OK |
 | `:v8` | 2026/10/19 18:12 | v3.1.2（commit 07b4eb8・c293560） | 「外来を選択」を確実に・手順の失敗は DX へ。リビジョン 00012-xpt。黒ヤギ【進めてよい】。確認 GCP-TEST-20261019-181254: 外来を選択 ok（click・選べた確認あり）・カルテ番号あり 54.5秒・ナビへ知らせ1回 |
 | `:v7` | 2026/10/15 17:00 | v3.1.1（commit dad8c30） | 全員を許可（ALLOWED_HOMIS_IDS="*"・同時に設定）。リビジョン 00011-xqv。この直後にナビ HOMIS_WRITE_MODE=3（本番切り替え） |
 | `:v6` | 2026/10/15 14:21 | v3.1.0（commit 1c981d8） | ナビへの知らせ・/check-group。リビジョン homis-karte-writer-00010-gxq。環境変数 NAVI_WEBAPP_URL（ナビ本番の exec）を追加。書いてよい患者はテスト3人のまま |

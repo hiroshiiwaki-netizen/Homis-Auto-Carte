@@ -2,9 +2,17 @@
 """FAX カルテの受け口（横付けで受け取るだけ・段1）
 
 ==============================================================================
-バージョン: 0.3.1
-最終更新: 2026/10/29
+バージョン: 0.4.0
+最終更新: 2026/11/02
 改定履歴（新しい順・全体は docs/SPEC_v3_cloud.md 0章「モジュール別の版」）:
+  v0.4.0 11/02 問い合わせ（OhisamaBot → Tukusi WF1133）の口 POST /bot/receive を足す（FAX の口は変えない）。
+               合言葉は BOT_RECEIVER_KEY（FAX と別）。BOT_MODE＝off（記録だけ・既定）／test（テスト舞子・印つき）／live。
+               注文番号 BOT-<問い合わせ番号>-<送った時刻14桁>（直しの再送は別のカルテ・GAS の再送は二重よけ）。
+               homis_url（Tukusi が引いた患者）と homis_id（OhisamaBot の患者）を FAX と同じ patient_check で比べ、same だけ書く。
+               型紙 bot_s_interrupt・O なしで列 LIVE_QUEUE に入れる。入れられないときは BOT_FIELD_WEBHOOK と DX に番号と理由だけ。
+               仕様 docs/FAXカルテ_検討/SPEC_問い合わせ_ライター移行_v0.md v0.3（黒ヤギ仕様1回目の5点を反映）。
+               FAX の live: S（発信元）が空でも O があれば書く（止めるのは O が空のときだけ・11/2 16:14 札 -13・DX担当「空でいい」）。
+               黒ヤギ実装1回目 指摘3: 送った時刻は先頭14桁を使う（ミリ秒・時差の数字が付いても通す）
   v0.3.1 10/29 患者さんの食い違いを止める（岩城さん 10/29「HOMISID だけ気をつけないと」）。homis_id（おひさまシステムで探した
                1件目の患者ページ URL＝Tukusi が書く先）と homis_patient（OhiScanGo が FAX から決めた患者番号）を比べ、
                記録に patient_check（same／mismatch／missing）を残す（どのモードでも）。live では same のときだけ書き、
@@ -59,7 +67,7 @@ import unicodedata
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "0.3.1"
+VERSION = "0.4.0"
 MAX_BODY = 256 * 1024          # 受け取る本文の上限（バイト）
 READ_TIMEOUT = 10.0            # 1回の読み込みを待つ上限（秒）。少しずつ送る相手で箱がふさがらないように
 LABEL_MAX = 40                 # source・doc_type・route を記録する最大の長さ
@@ -101,17 +109,19 @@ def build_mirror_task(ticket: str, s: str, o: str) -> dict:
                        "テスト", MIRROR_MARK + s, o)
 
 
-def _build_task(queue: str, order_id: str, homis_id: str, patient_name: str, s: str, o: str) -> dict:
-    """ライターあての仕事（OIDC＋X-Writer-Key・型紙 fax_so）。試し書きと本番で同じ形"""
+def _build_task(queue: str, order_id: str, homis_id: str, patient_name: str, s: str, o, template: str = "fax_so") -> dict:
+    """ライターあての仕事（OIDC＋X-Writer-Key・既定の型紙 fax_so）。試し書きと本番で同じ形。
+    v0.4.0: 問い合わせは template=bot_s_interrupt・O なし（o=None なら oContent を入れない）"""
     writer = os.environ.get("WRITER_URL", "").rstrip("/")
     payload = {
         "orderId": order_id,
         "homisId": homis_id,
         "patientName": patient_name,
-        "template": "fax_so",
+        "template": template,
         "sContent": s,
-        "oContent": o,
     }
+    if o is not None:
+        payload["oContent"] = o
     return {"task": {
         "name": queue + "/tasks/" + order_id,
         "httpRequest": {
@@ -172,7 +182,7 @@ LIVE_HOMIS_URL_PREFIX = "https://homis.jp/"
 NOTIFY_TIMEOUT = 3.0   # 知らせの待ちの上限（秒）。Tukusi への返事を遅らせない（黒ヤギ 10/29 段3仕様 指摘4）
 LIVE_REASON_TEXT = {
     "no_ticket": "札番号がありません",
-    "empty": "S か O が空です",
+    "empty": "O（本文）が空です",
     "bad_homis_id": "患者番号が読めません",
     "no_config": "受け口の設定が足りません",
     "id_mismatch": "患者さんが食い違っています（おひさまシステムと OhiScanGo）",
@@ -230,7 +240,9 @@ def enqueue_live(ticket: str, homis_raw, s, o, patient_raw=None) -> str:
     check = patient_check(homis_raw, patient_raw)
     if not ticket:
         reason = "no_ticket"
-    elif not isinstance(s, str) or not isinstance(o, str) or not s.strip() or not o.strip():
+    elif not isinstance(o, str) or not o.strip():
+        # v0.4.0: 止めるのは O（本文）が空のときだけ。S（発信元）は空でもそのまま書く
+        # （11/2 16:14 札 -13 で S が空・O 1233字の FAX を書かずに止めた。DX担当「空でいい・そのまま書けばいい」）
         reason = "empty"
     elif not homis_id:
         reason = "bad_homis_id"
@@ -242,10 +254,98 @@ def enqueue_live(ticket: str, homis_raw, s, o, patient_raw=None) -> str:
     if reason:
         notify_live_failure(ticket, reason)
         return "skip:" + reason
+    s = s if isinstance(s, str) else ""
     word = _post_task(live_queue(), _build_task(live_queue(), "FAX-" + ticket, homis_id, "", s, o))
     if word.startswith("error"):
         notify_live_failure(ticket, word)
     return word
+
+
+# ---------- v0.4.0: 問い合わせ（OhisamaBot → Tukusi WF1133）の口 POST /bot/receive ----------
+# 仕様 docs/FAXカルテ_検討/SPEC_問い合わせ_ライター移行_v0.md v0.3。BOT_MODE＝off（記録だけ・既定）／test（テスト舞子に書く）／live
+BOT_ID_RE = re.compile(r"^[0-9A-Za-z\-]{1,20}$")   # 問い合わせの番号（FM の番号）
+BOT_TEST_MARK = "【GCP試し書き・問い合わせ】"
+BOT_REASON_TEXT = {
+    "bad_id": "問い合わせの番号がありません",
+    "bad_sent_at": "送った時刻がありません",
+    "empty": "カルテに書く文（S）が空です",
+    "bad_homis_id": "患者番号が読めません",
+    "id_mismatch": "患者さんが食い違っています（Tukusi の引いた患者と OhisamaBot の患者）",
+    "id_missing": "OhisamaBot の患者番号が届いていません",
+    "no_config": "受け口の設定が足りません",
+}
+
+
+def bot_mode() -> str:
+    """off／test／live。知らない値・未設定は off（書かない側に倒す）"""
+    mode = os.environ.get("BOT_MODE", "").strip().lower()
+    return mode if mode in ("off", "test", "live") else "off"
+
+
+def bot_order_id(inquiry_id, sent_at) -> tuple[str, str]:
+    """注文番号 BOT-<番号>-<送った時刻の数字14桁>。返り値 (注文番号 or "", 理由)。
+    同じ問い合わせの直しの再送（同じ番号・別の時刻）は別の注文、GAS の再送（同じ時刻）は同じ注文になる"""
+    i = "" if inquiry_id is None else unicodedata.normalize("NFKC", str(inquiry_id)).strip()
+    if not BOT_ID_RE.match(i):
+        return "", "bad_id"
+    digits = "".join(c for c in unicodedata.normalize("NFKC", str(sent_at or "")) if c in "0123456789")
+    if len(digits) < 14:
+        return "", "bad_sent_at"
+    # 先頭14桁（年月日時分秒）だけ使う。ミリ秒・時差の数字が付いても通す（黒ヤギ 11/2 実装1回目 指摘3）
+    return f"BOT-{i}-{digits[:14]}", ""
+
+
+def notify_bot_failure(order_hint: str, reason: str) -> None:
+    """仕事にできなかったことを、問い合わせ用の Chat と DX に知らせる。番号と理由だけ（患者番号・本文は入れない）"""
+    why = BOT_REASON_TEXT.get(reason.split(":", 1)[0], reason)
+    text = (f"問い合わせのカルテを書けませんでした（受け口・{why}）。\n{order_hint or '（番号なし）'}\n"
+            "問い合わせの画面の内容を見て、HOMIS のカルテを確かめてください。")
+    for name in ("BOT_FIELD_WEBHOOK", "DX_ALERT_WEBHOOK"):
+        hook = os.environ.get(name, "").strip()
+        if not hook:
+            continue
+        try:
+            req = urllib.request.Request(hook, data=json.dumps({"text": text}, ensure_ascii=False).encode("utf-8"),
+                                         method="POST", headers={"Content-Type": "application/json; charset=utf-8"})
+            with urllib.request.urlopen(req, timeout=NOTIFY_TIMEOUT):
+                pass
+        except Exception:  # noqa: BLE001  知らせの失敗で Tukusi への返事を壊さない
+            log_line({"event": "bot_notify_failed", "to": name, "severity": "WARNING"})
+
+
+def enqueue_bot(body: dict) -> tuple[str, str, str]:
+    """問い合わせの仕事を列に入れる。返り値 (結果の短い言葉, 注文番号, 患者の照合)。
+    off は何もしない（記録だけ）。test は書く先をテスト舞子に固定し、S の先頭に印を付ける"""
+    mode = bot_mode()
+    order_id, reason = bot_order_id(body.get("id"), body.get("sent_at"))
+    check = patient_check(body.get("homis_url"), body.get("homis_id"))
+    if mode == "off":
+        return "off", order_id, check
+    s = body.get("s")
+    homis_id = extract_homis_id(body.get("homis_url"))
+    if not reason and (not isinstance(s, str) or not s.strip()):
+        reason = "empty"
+    if not reason and not homis_id:
+        reason = "bad_homis_id"
+    if not reason and check != "same":
+        reason = "id_missing" if check == "missing" else "id_mismatch"
+    if not reason and not all(os.environ.get(k, "").strip() for k in ("WRITER_URL", "LIVE_QUEUE", "TASKS_INVOKER_SA", "WRITER_KEY")):
+        reason = "no_config"
+    if reason:
+        notify_bot_failure(order_id or ("問い合わせ番号 " + str(body.get("id") or "")[:20]), reason)
+        return "skip:" + reason, order_id, check
+    if mode == "test":
+        test_id = os.environ.get("MIRROR_HOMIS_ID", "2277808").strip()
+        if test_id not in MIRROR_TEST_PATIENTS:
+            return "skip:not_test_patient", order_id, check
+        order_id, homis_id, s = order_id.replace("BOT-", "BOT-TEST-", 1), test_id, BOT_TEST_MARK + s
+    task = _build_task(live_queue(), order_id, homis_id, "", s, None, template="bot_s_interrupt")
+    word = _post_task(live_queue(), task)
+    if word.startswith("error"):
+        notify_bot_failure(order_id, word)
+    return word, order_id, check
+
+
 _first_request_done = False
 
 
@@ -420,8 +520,52 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self._reply(404, {"ok": False})
 
+    def _do_bot(self, t0: float) -> None:
+        """v0.4.0: 問い合わせの口。合言葉（BOT_RECEIVER_KEY・FAX とは別）→ 長さ → JSON → 列。
+        記録は番号・照合の結果・文字数だけ（本文・患者番号は入れない）。受け取れたら Tukusi には必ず 200"""
+        expected = os.environ.get("BOT_RECEIVER_KEY", "")
+        if not expected.strip():
+            self._reject(503, "bot_no_key_configured")
+            return
+        if not key_ok(self.headers.get("Authorization", ""), expected):
+            self._reject(401, "bot_bad_key")
+            return
+        raw_len = self.headers.get("Content-Length")
+        if raw_len is None or not raw_len.strip().isdigit():
+            self._reject(411, "bot_no_length")
+            return
+        length = int(raw_len.strip())
+        if length > MAX_BODY:
+            self._reject(413, "bot_too_large")
+            return
+        raw = self._read_body(length) if length else b""
+        if raw is None:
+            self._drop("bot_read_incomplete")
+            return
+        record = {"event": "bot_receive", "version": VERSION, "body_bytes": len(raw), "mode": bot_mode()}
+        try:
+            body = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError) as e:
+            body = None
+            record["json_error"] = type(e).__name__
+        if not isinstance(body, dict):
+            record.update({"json_ok": False, "severity": "WARNING"})
+            record.setdefault("json_error", "not_object")
+            log_line(record)
+            self._reply(400, {"ok": False})
+            return
+        record.update({"json_ok": True, "s": text_stats(body.get("s")), "homis_id": homis_stats(body.get("homis_id"))})
+        record["result"], record["order_id"], record["patient_check"] = enqueue_bot(body)
+        del body, raw   # 本文はここで捨てる
+        record["elapsed_ms"] = int((time.time() - t0) * 1000)
+        log_line(record)
+        self._reply(200, {"ok": True})
+
     def do_POST(self):  # noqa: N802
         t0 = time.time()
+        if self.path.split("?")[0] == "/bot/receive":
+            self._do_bot(t0)
+            return
         if self.path.split("?")[0] != "/fax/receive":
             if self._drain():
                 self._reply(404, {"ok": False})

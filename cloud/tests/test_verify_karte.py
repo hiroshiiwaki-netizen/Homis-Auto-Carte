@@ -185,6 +185,56 @@ class VerifyKarte(unittest.TestCase):
         r = self.run_v(s="秘密の送り元", o="秘密の本文")
         self.assertNotIn("秘密", json.dumps(r, ensure_ascii=False))
 
+    # --- v1.1.0 問い合わせ（expect="interrupt"） ---
+    def bot(self, status="2", s="問い合わせ着信", o=" ", who="おひさまロボット GCP"):
+        k = karte(status=status, s=s, o=o)
+        k["upd_user"] = {"full_name": who}
+        return k
+
+    def run_i(self, s="問い合わせ着信"):
+        return verify_karte.verify("2277808", "100", s, "", expect="interrupt")
+
+    def test_i1_interrupt_ok(self):
+        self.h.karte_script = [self.bot()]
+        self.assertEqual(self.run_i()["verdict"], "ok")
+
+    def test_i2_completed_is_not_interrupt(self):
+        self.h.karte_script = [self.bot(status="3"), self.bot(status="3")]
+        r = self.run_i()
+        self.assertEqual((r["verdict"], r["reads"]), ("not_interrupted", 2))
+
+    def test_i3_someone_elses_karte(self):
+        # 中断・S も同じでも、更新者がライターでなければ合格にしない（名前は結果に出さない）
+        self.h.karte_script = [self.bot(who="職員 太郎")]
+        r = self.run_i()
+        self.assertEqual(r["verdict"], "not_mine")
+        self.assertNotIn("太郎", json.dumps(r, ensure_ascii=False))
+
+    def test_i3b_name_spaces_are_normalized(self):
+        # 指摘1: 全角の空白・前後の空白・連続した空白はそろえて比べる
+        for who in ("おひさまロボット　GCP", " おひさまロボット  GCP ", "おひさまロボット GCP"):
+            self.h.karte_script = [self.bot(who=who)]
+            self.assertEqual(self.run_i()["verdict"], "ok", who)
+
+    def test_i4_o_must_be_blank(self):
+        self.h.karte_script = [self.bot(o="訪問の記録")]
+        self.assertEqual(self.run_i()["verdict"], "o_mismatch")
+
+    def test_i5_s_mismatch(self):
+        self.h.karte_script = [self.bot(s="別の問い合わせ")]
+        self.assertEqual(self.run_i()["verdict"], "s_mismatch")
+
+    def test_i6_no_upd_user(self):
+        self.h.karte_script = [karte(status="2", s="問い合わせ着信", o=" ")]
+        self.assertEqual(self.run_i()["verdict"], "not_mine")
+
+    def test_i7_fax_unchanged_ignores_updater(self):
+        # FAX（既定 done）は更新者を見ない（今までどおり）
+        k = karte()
+        k["upd_user"] = {"full_name": "だれか"}
+        self.h.karte_script = [k]
+        self.assertEqual(self.run_v()["verdict"], "ok")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=1)

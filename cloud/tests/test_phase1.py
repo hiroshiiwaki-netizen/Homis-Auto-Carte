@@ -15,6 +15,7 @@ import json
 import os
 import sys
 import threading
+import time
 import types
 import unittest
 import urllib.request
@@ -135,7 +136,7 @@ class Phase1(unittest.TestCase):
         self.verify_result = {"verdict": "ok", "status": "3", "reads": 1, "s_len": 1, "o_len": 1, "reason": ""}
         self.verify_calls = []
         server.verify_karte = types.SimpleNamespace(
-            verify=lambda *a: (self.verify_calls.append(a), dict(self.verify_result))[1])
+            verify=lambda *a, **k: (self.verify_calls.append(a + tuple(sorted(k.items()))), dict(self.verify_result))[1])
 
     def tearDown(self):
         self.httpd.shutdown(); self.navi.close(); self.dx.close()
@@ -400,6 +401,203 @@ class Phase1(unittest.TestCase):
         server._run_once = lambda data: {"success": False, "karte_url": "", "error_type": "timeout"}
         out = ORIG_WRITE_KARTE(self.live("FAX-261029090000-5"))
         self.assertFalse(out["success"])
+
+    # --- v3.4.0 新規が開けなかった（入力途中のカルテ）・カルテ番号なしは失敗 ---
+    def test_b1_blocked_is_failure_and_tells_field_and_dx(self):
+        self.field_setup()
+        def run(data):
+            server._TLS.karte_opened = True
+            server._TLS.blocked = "in_progress_karte"
+            return {"success": True, "karte_url": "", "error_type": "step:電話再診を選択", "failed_steps": ["電話再診を選択"]}
+        server._run_once = run
+        out = ORIG_WRITE_KARTE(self.live("FAX-261102113620-9"))
+        self.assertEqual((out["success"], out["error_type"]), (False, "blocked:in_progress_karte"))
+        self.assertEqual(len(self.field.calls), 1)
+        self.assertIn("入力途中のカルテ", self.field.calls[0]["text"])
+        self.assertEqual(len(self.dx.calls), 1)                       # 「空のカルテの疑い」ではなく止めた理由だけ
+        self.assertIn("何も書かずに止めました", self.dx.calls[0]["text"])
+        self.assertEqual(self.verify_calls, [])                      # 読み直しもしない
+
+    def test_b2_fax_without_karte_id_is_failure(self):
+        # 11/2 11:36: 成功扱いでカルテ番号なし → 現場に知らせが出なかった
+        self.field_setup()
+        server._run_once = lambda data: {"success": True, "karte_url": "", "error_type": ""}
+        out = ORIG_WRITE_KARTE(self.live("FAX-261102113620-8"))
+        self.assertEqual((out["success"], out["error_type"]), (False, "no_karte_id"))
+        self.assertEqual(len(self.field.calls), 1)
+        self.assertIn("カルテ番号が取れませんでした", self.field.calls[0]["text"])
+
+    def test_b3_xray_without_karte_id_unchanged(self):
+        # レントゲンは今までどおり（成功のまま・ナビが患者ページで出す）
+        server._run_once = lambda data: {"success": True, "karte_url": "", "error_type": ""}
+        out = ORIG_WRITE_KARTE(self.body(oid="GCP-T-B3"))
+        self.assertTrue(out["success"])
+
+    def test_b4_click_hook_detects_alert_and_skips_steps(self):
+        accepted = []
+        class FakeAlert:
+            text = "入力途中のカルテが存在します"
+            def accept(self): accepted.append(1)
+        class FakeDriver:
+            class switch_to:
+                alert = FakeAlert()
+            def execute_script(self, *a): pass
+        fake = types.SimpleNamespace(driver=FakeDriver())
+        server._reset_opened()
+        self.assertFalse(server._click_cloud(fake, "#karteNew"))
+        self.assertEqual((server._blocked(), accepted), ("in_progress_karte", [1]))
+        self.assertFalse(server._opened())                           # 指摘5: 新規は開いていない
+        called = []
+        orig = server._orig_execute
+        server._orig_execute = lambda *a: called.append(a) or True
+        try:
+            self.assertFalse(server._execute_cloud(fake, {"name": "S欄に入力"}, {}))   # S・O も完了も押さない
+            self.assertEqual(called, [])
+            server._reset_opened()
+            self.assertTrue(server._execute_cloud(fake, {"name": "S欄に入力"}, {}))    # 止めていなければ今までどおり
+            self.assertEqual(len(called), 1)
+        finally:
+            server._orig_execute = orig
+            server._reset_opened()
+
+    def test_b5_click_hook_no_alert_keeps_going(self):
+        class NoAlert:
+            @property
+            def alert(self): raise RuntimeError("no alert")
+        fake = types.SimpleNamespace(driver=types.SimpleNamespace(switch_to=NoAlert(), execute_script=lambda *a: None))
+        server.BLOCK_ALERT_WAIT_SEC, keep = 0.3, server.BLOCK_ALERT_WAIT_SEC
+        try:
+            server._reset_opened()
+            server._click_cloud(fake, "#karteNew")
+            self.assertEqual(server._blocked(), "")
+            self.assertTrue(server._opened())
+        finally:
+            server.BLOCK_ALERT_WAIT_SEC = keep
+
+    def test_b6_other_alert_also_blocks(self):
+        # 黒ヤギ 11/2 指摘4: 知らない文の知らせでも、新規が開いていないので止める
+        class OtherAlert:
+            text = "セッションが切れました"
+            def accept(self): pass
+        fake = types.SimpleNamespace(driver=types.SimpleNamespace(switch_to=types.SimpleNamespace(alert=OtherAlert())))
+        server._reset_opened()
+        self.assertFalse(server._click_cloud(fake, "#karteNew"))
+        self.assertEqual(server._blocked(), "unexpected_alert")
+        self.assertFalse(server._opened())
+        server._reset_opened()
+
+    def test_b7_new_form_seen_returns_early(self):
+        # 指摘3: 完了ボタンが見えたら 2 秒待たずに進む
+        class NoAlert:
+            @property
+            def alert(self): raise RuntimeError("no alert")
+        seen = []
+        def find(by, sel):
+            seen.append(sel)
+            return [types.SimpleNamespace(is_displayed=lambda: True)]
+        fake = types.SimpleNamespace(driver=types.SimpleNamespace(switch_to=NoAlert(), find_elements=find, execute_script=lambda *a: None))
+        server.BLOCK_ALERT_WAIT_SEC, keep = 5.0, server.BLOCK_ALERT_WAIT_SEC
+        try:
+            server._reset_opened()
+            t0 = time.time()
+            server._click_cloud(fake, "#karteNew")
+            self.assertLess(time.time() - t0, 1.0)
+            self.assertEqual(seen[0], server.NEW_FORM_SELECTOR)
+            self.assertEqual(server._blocked(), "")
+            self.assertTrue(server._opened())
+        finally:
+            server.BLOCK_ALERT_WAIT_SEC = keep
+            server._reset_opened()
+
+    def test_b8_blocked_dx_text_per_template(self):
+        # 指摘1・2: FAX は Tukusi への送り直し（新しい札）、レントゲンは送り元から送り直すか手で（fax_requeue は書かない）
+        def run(data):
+            server._TLS.blocked = "in_progress_karte"
+            return {"success": True, "karte_url": "", "error_type": ""}
+        server._run_once = run
+        self.field_setup()
+        ORIG_WRITE_KARTE(self.live("FAX-261102113620-7"))
+        self.assertIn("tukusi_resend", self.dx.calls[-1]["text"])
+        self.assertIn("fax_requeue.py は使えません", self.dx.calls[-1]["text"])
+        ORIG_WRITE_KARTE(self.body(oid="GCP-T-B8"))
+        self.assertNotIn("fax_requeue", self.dx.calls[-1]["text"])
+        self.assertIn("送り直す", self.dx.calls[-1]["text"])
+
+    # --- v3.5.0 FAX は S（発信元）が空でも受ける・O が空なら断る ---
+    def test_s30_fax_empty_s_is_accepted(self):
+        self.next_result = {"success": True, "karte_url": "https://homis.jp/homic/?pid=patient_detail&patient_id=2277808&karte_id=1"}
+        st, _ = post(self.base + "/write", {"orderId": "FAX-T-S30", "homisId": "2277808", "template": "fax_so", "sContent": "", "oContent": "本文"})
+        self.assertEqual(st, 200)
+        st, body = post(self.base + "/write", {"orderId": "FAX-T-S30b", "homisId": "2277808", "template": "fax_so", "sContent": "送り元", "oContent": ""})
+        self.assertEqual((st, body.get("error")), (400, "missing_so"))
+
+    def test_s31_fax_empty_s_becomes_half_space(self):
+        # S が空だと HOMIS が完了で保存しない → 半角スペース1つにして書く（読み直しにも同じ値を渡す）
+        seen = []
+        def run(data):
+            seen.append(data.get("sContent"))
+            return {"success": True, "karte_url": "https://homis.jp/homic/?pid=patient_detail&patient_id=2277808&karte_id=5", "error_type": ""}
+        server._run_once = run
+        for s in ("", None, "  "):
+            ORIG_WRITE_KARTE(self.body(oid="FAX-MIRROR-S31", template="fax_so", sContent=s, oContent="本文"))
+        self.assertEqual(seen, [" ", " ", " "])
+        self.assertEqual(self.verify_calls[-1][2], " ")
+        seen.clear()
+        ORIG_WRITE_KARTE(self.body(oid="FAX-MIRROR-S31b", template="fax_so", sContent="送り元", oContent="本文"))
+        self.assertEqual(seen, ["送り元"])                                    # 中身があれば変えない
+
+    # --- v3.5.0 問い合わせ（bot_s_interrupt） ---
+    def bot_field_setup(self):
+        self.bot_field = FakeNavi()
+        os.environ["BOT_FIELD_WEBHOOK"] = self.bot_field.url
+        self.addCleanup(lambda: (self.bot_field.close(), os.environ.pop("BOT_FIELD_WEBHOOK", None)))
+
+    def bot(self, oid):
+        return self.body(oid=oid, template="bot_s_interrupt", sContent="問い合わせ着信")
+
+    def test_k1_bot_verified_as_interrupt(self):
+        server._run_once = lambda data: {"success": True, "karte_url": "https://homis.jp/homic/?pid=patient_detail&patient_id=2277808&karte_id=77", "error_type": ""}
+        self.verify_result = dict(self.verify_result, status="2")
+        out = ORIG_WRITE_KARTE(self.bot("BOT-123-20261102160000"))
+        self.assertTrue(out["success"])
+        self.assertEqual(self.verify_calls[0], ("2277808", "77", "問い合わせ着信", "", ("expect", "interrupt")))
+
+    def test_k2_bot_not_mine_fails_and_tells_bot_space(self):
+        self.field_setup(); self.bot_field_setup()
+        server._run_once = lambda data: {"success": True, "karte_url": "https://homis.jp/homic/?pid=patient_detail&patient_id=2277808&karte_id=78", "error_type": ""}
+        self.verify_result = dict(self.verify_result, verdict="not_mine", status="2")
+        out = ORIG_WRITE_KARTE(self.bot("BOT-123-20261102160001"))
+        self.assertEqual((out["success"], out["error_type"]), (False, "verify:not_mine"))
+        self.assertEqual(self.field.calls, [])                               # FAX のスペースには出さない
+        self.assertEqual(len(self.bot_field.calls), 1)
+        t = self.bot_field.calls[0]["text"]
+        self.assertIn("問い合わせ（OhisamaBot）のカルテを書けませんでした", t)
+        self.assertNotIn("FAX", t)
+
+    def test_k3_bot_without_karte_id_is_failure(self):
+        self.bot_field_setup()
+        server._run_once = lambda data: {"success": True, "karte_url": "", "error_type": ""}
+        out = ORIG_WRITE_KARTE(self.bot("BOT-123-20261102160002"))
+        self.assertEqual((out["success"], out["error_type"]), (False, "no_karte_id"))
+        self.assertEqual(len(self.bot_field.calls), 1)
+
+    def test_k4_bot_test_order_is_quiet(self):
+        self.bot_field_setup()
+        server._run_once = lambda data: {"success": False, "karte_url": "", "error_type": "timeout"}
+        ORIG_WRITE_KARTE(self.bot("BOT-TEST-123-20261102160003"))
+        self.assertEqual(self.bot_field.calls, [])
+
+    def test_k5_bot_blocked_dx_text(self):
+        self.bot_field_setup()
+        def run(data):
+            server._TLS.blocked = "in_progress_karte"
+            return {"success": True, "karte_url": "", "error_type": ""}
+        server._run_once = run
+        ORIG_WRITE_KARTE(self.bot("BOT-123-20261102160004"))
+        t = self.dx.calls[-1]["text"]
+        self.assertIn("問い合わせの画面の内容から", t)
+        self.assertNotIn("tukusi_resend", t)
+        self.assertEqual(len(self.bot_field.calls), 1)
 
     def test_i1_http_write_with_real_verify_against_fake_homis(self):
         # 結合: 受け口の HTTP（/write）→ 本物の write_karte → 本物の verify_karte → 偽の HOMIS（編集中のまま）→ 500・DX 1件

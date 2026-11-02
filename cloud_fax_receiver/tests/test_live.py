@@ -174,10 +174,23 @@ class LiveFlow(MirrorFlow):
         self.check_skip(log, "skip:bad_homis_id", "261029090000-3")
         self.assertIn("患者番号が読めません", self.chat.texts[0][1])
 
-    def test_l4_empty_s(self):
+    def test_l4_empty_o(self):
+        # v0.4.0: 止めるのは O（本文）が空のときだけ
         port, log = self.start_live()
-        self.send_live(port, ticket="261029090000-4", s=" ")
+        self.send_live(port, ticket="261029090000-4", o=" ")
         self.check_skip(log, "skip:empty", "261029090000-4")
+        self.assertIn("O（本文）が空", self.chat.texts[0][1])
+
+    def test_l4b_empty_s_is_written(self):
+        # v0.4.0: S（発信元）が空でも O があれば書く（11/2 16:14 札 -13・岩城さん「空でいい」）
+        port, log = self.start_live()
+        for i, s in enumerate(("", None)):
+            self.cloud.tasks.clear()
+            self.send_live(port, ticket=f"261102161400-{i}", s=s)
+            self.assertEqual(self.last(log)["live"], "queued")
+            p = json.loads(base64.b64decode(self.cloud.tasks[0]["task"]["httpRequest"]["body"]).decode("utf-8"))
+            self.assertEqual((p["sContent"], p["oContent"]), ("", SECRET_O))
+        self.assertEqual(self.chat.texts, [])
 
     def test_l5_no_ticket(self):
         port, log = self.start_live()

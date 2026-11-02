@@ -2,9 +2,25 @@
 """Cloud Run 受け口（フェーズ2a＋失敗ガード）
 
 ==============================================================================
-バージョン: 3.3.0
-最終更新: 2026/10/29
+バージョン: 3.5.0
+最終更新: 2026/11/02
 改定履歴（新しい順・全体は docs/SPEC_v3_cloud.md 0章「モジュール別の版」）:
+  v3.5.0 11/02 問い合わせ（bot_s_interrupt・注文番号 BOT-…）を本番で受けられるようにする（受け口 0.4.0 の /bot/receive から）。
+               書いたあと読み直す（verify_karte 1.1.0 の expect="interrupt"＝中断・更新者がライター自身・S 一致・O 空）。
+               カルテ番号が取れなければ失敗（FAX と同じ）。書けなかったら現場の知らせを型紙ごとに分ける
+               （FAX＝FAX_FIELD_WEBHOOK「FAX の原本から」／問い合わせ＝BOT_FIELD_WEBHOOK「問い合わせの画面の内容から」・
+               試し書き BOT-TEST-… は知らせない）。止めたとき（blocked）の DX の文も問い合わせ用を足す。
+               FAX（fax_so）は S（発信元）が空でも受ける（O が空のときだけ 400・11/2 札 -13・DX担当「空でいい」）。
+               ただし S が空だと HOMIS が完了で保存しない（テスト舞子で編集中のまま残った）ので、空なら半角スペース1つを入れて書く
+               （半角・全角とも完了まで保存できることをテスト舞子で確認。DX担当「半角スペースを入れて」）。
+               それ以外の FAX・レントゲンの動きは変えない。
+               仕様 docs/FAXカルテ_検討/SPEC_問い合わせ_ライター移行_v0.md v0.3（黒ヤギ仕様1回目 指摘2・4）
+  v3.4.0 11/02 「新規」を押した直後に HOMIS が「入力途中のカルテが存在します」と出したら、そこで止める（以後の手順を一切しない）。
+               失敗（error_type blocked:in_progress_karte）にして DX と現場（本番の FAX）に理由つきで知らせる。
+               FAX（fax_so）でカルテ番号が取れなかったら必ず失敗にする（11/2 11:36 本番の1件が成功扱いになり現場に知らせが出なかった）。
+               黒ヤギ 11/2 1回目: 新規のあとの知らせはどんな文でも止める（unexpected_alert）・完了ボタンが出たら待たずに進む・
+               止めたら karte_opened を戻す・DX の文は型紙ごと（FAX は Tukusi への送り直し＝新しい札、レントゲンは送り元から送り直すか手で）。
+               fax_requeue は live では使えない（同じ注文番号は二重よけで弾かれ、本文は試し書きにしか無い）ので案内しない
   v3.3.0 10/29 段3: 本番の FAX（注文番号 FAX-…・試し書きの FAX-MIRROR-… は除く）が書けなかったとき（読み直しで合わない場合も）、
                現場用のスペース（FAX_FIELD_WEBHOOK）にも直リンク付きで知らせる。DX への知らせは今まで通り。
                仕様 docs/FAXカルテ_検討/SPEC_段3_本番切替.md 4章
@@ -70,6 +86,13 @@ WRITE_LOCK = threading.Lock()
 _TLS = threading.local()
 
 _orig_click = BrowserActions._action_click
+_orig_execute = getattr(BrowserActions, "execute_action", None)
+# v3.4.0: 「新規」を押したあとに HOMIS が出す知らせのうち、新規の画面が開いていないことを表すもの
+BLOCK_ALERT_WORDS = ("入力途中のカルテが存在します",)
+BLOCK_ALERT_WAIT_SEC = 2.0
+# 新規の画面が開くと編集タブ（最初は空の div・11/2 テスト舞子のページで確認）に「完了」ボタンが入る。
+# 見つからなくても 2 秒待つだけ。誤って早く進んでも、FAX はカルテ番号なしで失敗になる（v3.4.0 の守り）
+NEW_FORM_SELECTOR = "#pdetail_karteedit #karteCompletion"
 
 # v3.1.3: 途中の手順が失敗したとき、DX に「どこを確かめるか」を型紙ごとに伝える
 STEP_FAIL_HINT = {
@@ -79,9 +102,12 @@ STEP_FAIL_HINT = {
 }
 
 # v3.2.0: 書いたあと読み直す型紙と、合わなかったときの DX への文
-VERIFY_TEMPLATES = {"fax_so"}
+VERIFY_TEMPLATES = {"fax_so", "bot_s_interrupt"}   # v3.5.0: 問い合わせも読み直す（中断が合格）
+VERIFY_EXPECT = {"bot_s_interrupt": "interrupt"}    # 無ければ "done"（完了が合格）
 VERIFY_TEXT = {
     "not_completed": "カルテが「完了」になっていません",
+    "not_interrupted": "カルテが「中断」になっていません",
+    "not_mine": "読み直したカルテの最後の更新者がライターではありません（別のカルテを読んでいる見込み）",
     "s_mismatch": "S が送った文と違います",
     "o_mismatch": "O が送った文と違います",
     "unverified": "書いたあとの読み直しができませんでした（書けていないとは限りません）",
@@ -89,7 +115,12 @@ VERIFY_TEXT = {
 
 # v3.3.0: 本番の FAX が書けなかったときの、現場用スペースへの文（理由の言葉）
 FIELD_REASON = {
+    "blocked:in_progress_karte": "その患者さんに入力途中のカルテ（訪問の予定など）があり、新規が開けませんでした",
+    "blocked:unexpected_alert": "新規を押したあと HOMIS から知らせが出て、新規が開けませんでした",
+    "no_karte_id": "カルテ番号が取れませんでした（保存できていない見込み）",
     "verify:not_completed": "保存が完了していません",
+    "verify:not_interrupted": "中断で保存できていません",
+    "verify:not_mine": "書いたカルテを確かめられませんでした（別のカルテの見込み）",
     "verify:s_mismatch": "S が送った文と違います",
     "verify:o_mismatch": "O が送った文と違います",
 }
@@ -112,6 +143,44 @@ DX_EMPTY = {
 
 def _reset_opened():
     _TLS.karte_opened = False
+    _TLS.blocked = ""
+
+
+def _blocked() -> str:
+    return str(getattr(_TLS, "blocked", "") or "")
+
+
+def _check_block_alert(driver) -> str:
+    """新規を押した直後の知らせを見る。返り値: 止める理由（in_progress_karte／unexpected_alert）か空。
+    知らせはどんな文でも閉じて止める（新規の画面が開いていないのに先へ進まない・黒ヤギ 11/2 指摘4）。
+    新規の画面（完了ボタン）が出たら待たずに戻る（指摘3）"""
+    end = time.time() + BLOCK_ALERT_WAIT_SEC
+    while time.time() < end:
+        try:
+            alert = driver.switch_to.alert
+            text = str(alert.text or "")
+        except Exception:  # noqa: BLE001  知らせが無い
+            try:
+                if any(e.is_displayed() for e in driver.find_elements("css selector", NEW_FORM_SELECTOR)):
+                    return ""
+            except Exception:  # noqa: BLE001
+                pass
+            time.sleep(0.2)
+            continue
+        try:
+            alert.accept()
+        except Exception:  # noqa: BLE001
+            pass
+        return "in_progress_karte" if any(w in text for w in BLOCK_ALERT_WORDS) else "unexpected_alert"
+    return ""
+
+
+def _execute_cloud(self, action, data):
+    """v3.4.0: 新規が開けなかった（blocked）あとは、どの手順も実行しない（S・O の入力や完了を押さない）"""
+    if _blocked():
+        logger.info("止めているため手順を飛ばす: %s", action.get("name", "") if isinstance(action, dict) else "")
+        return False
+    return _orig_execute(self, action, data)
 
 
 def _opened() -> bool:
@@ -143,6 +212,13 @@ def _click_cloud(self, selector, selector_type="css", text_contains=""):
     if selector == "#karteNew":
         _TLS.karte_opened = True
         logger.info("karte_opened=1")
+        # v3.4.0: 新規の画面が開かなかった知らせ（入力途中のカルテ）なら、ここで止める
+        reason = _check_block_alert(self.driver)
+        if reason:
+            _TLS.blocked = reason
+            _TLS.karte_opened = False   # 新規は開いていない（黒ヤギ 11/2 指摘5）
+            logger.warning("新規が開けないため止める（HOMIS の知らせ: %s）", reason)
+            return False
     return out
 
 
@@ -205,14 +281,29 @@ def _is_live_fax(data: dict) -> bool:
     return _template_name(data) == "fax_so" and oid.startswith("FAX-") and not oid.startswith("FAX-MIRROR-")
 
 
-def _notify_field(order_id: str, page_url: str, err: str) -> None:
-    """本番の FAX が書けなかったことを現場用スペースに知らせる。例外は外に出さない（書いた結果は必ず返す）"""
-    hook = os.environ.get("FAX_FIELD_WEBHOOK", "").strip()
+def _is_live_bot(data: dict) -> bool:
+    """v3.5.0: 本番の問い合わせの注文か（試し書き BOT-TEST-… は現場に知らせない）"""
+    oid = str(data.get("orderId") or "")
+    return _template_name(data) == "bot_s_interrupt" and oid.startswith("BOT-") and not oid.startswith("BOT-TEST-")
+
+
+# v3.5.0: 現場への知らせの送り先と文（型紙ごと・黒ヤギ 11/2 仕様1回目 指摘4: FAX の文が問い合わせに出ないように）
+FIELD_TARGET = {
+    "fax_so": ("FAX_FIELD_WEBHOOK", "FAX のカルテを書けませんでした（{why}）。HOMIS でカルテを確かめ、無ければ FAX の原本から書いてください。"),
+    "bot_s_interrupt": ("BOT_FIELD_WEBHOOK", "問い合わせ（OhisamaBot）のカルテを書けませんでした（{why}）。"
+                        "HOMIS でカルテを確かめ、無ければ問い合わせの画面の内容から書いてください。"),
+}
+
+
+def _notify_field(order_id: str, page_url: str, err: str, template: str = "fax_so") -> None:
+    """本番の FAX・問い合わせが書けなかったことを現場用スペースに知らせる。例外は外に出さない（書いた結果は必ず返す）"""
+    env_name, head = FIELD_TARGET.get(template, FIELD_TARGET["fax_so"])
+    hook = os.environ.get(env_name, "").strip()
     if not hook:
-        logger.warning("FAX_FIELD_WEBHOOK 未設定 orderId=%s", order_id)
+        logger.warning("%s 未設定 orderId=%s", env_name, order_id)
         return
     why = FIELD_REASON.get(err, f"書き込みに失敗しました（{err or '理由不明'}）")
-    text = f"FAX のカルテを書けませんでした（{why}）。HOMIS でカルテを確かめ、無ければ FAX の原本から書いてください。\n{page_url}\n注文番号 {order_id}"
+    text = head.format(why=why) + f"\n{page_url}\n注文番号 {order_id}"
     body = json.dumps({"text": text}, ensure_ascii=False).encode("utf-8")
     req = urllib.request.Request(hook, data=body, headers={"Content-Type": "application/json; charset=utf-8"}, method="POST")
     try:
@@ -229,6 +320,8 @@ def _run_once(data: dict) -> dict:
         return {"success": False, "karte_url": None, "error_type": "login"}
     TemplateEngine._init_driver = _init_driver_cloud
     BrowserActions._action_click = _click_cloud
+    if _orig_execute is not None:
+        BrowserActions.execute_action = _execute_cloud
     engine = TemplateEngine(
         {"homis_user": user, "homis_password": password, "test_mode": False},
         headless=True,
@@ -245,6 +338,10 @@ def _sheet_status(success: bool, kid: str) -> str:
 
 
 def write_karte(data: dict) -> dict:
+    if _template_name(data) == "fax_so" and not str(data.get("sContent") or "").strip():
+        # v3.5.0: S（発信元）が空だと HOMIS は完了で保存しない（11/2 テスト舞子で「編集中」のまま残った）。
+        # 半角スペース1つなら完了まで保存できる（同日テスト舞子で確認）。DX担当「S が空のときは半角スペースを入れて」
+        data = dict(data, sContent=" ")
     order_id = str(data.get("orderId") or "")
     homis_id = str(data.get("homisId") or "")
     t0 = time.time()
@@ -286,10 +383,21 @@ def write_karte(data: dict) -> dict:
             err = err or "opened_then_fail"
     url = result.get("karte_url") or ""
     kid = extract_karte_id(url)
+    blocked = _blocked()
+    if blocked:
+        # v3.4.0: 新規が開けず止めた。何も保存していない（以後の手順は飛ばした）
+        result["success"] = False
+        err = "blocked:" + blocked
+        kid, url = "", ""
+    elif _template_name(data) in ("fax_so", "bot_s_interrupt") and not kid and result.get("success"):
+        # v3.4.0: カルテ番号が取れないのに成功扱いにしない（11/2 11:36 現場に知らせが出なかった）。v3.5.0: 問い合わせも同じ
+        result["success"] = False
+        err = err or "no_karte_id"
     checked = None
     if _template_name(data) in VERIFY_TEMPLATES and result.get("success") and kid:
         # v3.2.0: カルテ番号が取れても、保存されたとは限らない（10/23〜28 Tukusi で7件が空のまま成功扱い）。読み直して確かめる
-        checked = verify_karte.verify(homis_id, kid, str(data.get("sContent") or ""), str(data.get("oContent") or ""))
+        checked = verify_karte.verify(homis_id, kid, str(data.get("sContent") or ""), str(data.get("oContent") or ""),
+                                      expect=VERIFY_EXPECT.get(_template_name(data), "done"))
         logger.info("読み直し orderId=%s verdict=%s status=%s reads=%s s_len=%s o_len=%s reason=%s", order_id,
                     checked["verdict"], checked["status"], checked["reads"], checked["s_len"], checked["o_len"], checked["reason"])
         if checked["verdict"] != "ok":
@@ -299,14 +407,33 @@ def write_karte(data: dict) -> dict:
                 + f"\n{_patient_url(homis_id, url)}\norderId={order_id}",
                 order_id,
             )
-        if checked["verdict"] in ("not_completed", "s_mismatch", "o_mismatch"):
+        if checked["verdict"] in ("not_completed", "not_interrupted", "not_mine", "s_mismatch", "o_mismatch"):
             result["success"] = False
             err = "verify:" + checked["verdict"]
     total = time.time() - t0
     log_result(order_id, bool(result.get("success")), kid, err, total)
-    if _is_live_fax(data) and not result.get("success"):
-        _notify_field(order_id, _patient_url(homis_id, url), err)
-    if _should_notify_dx(opened, kid, err):
+    if (_is_live_fax(data) or _is_live_bot(data)) and not result.get("success"):
+        _notify_field(order_id, _patient_url(homis_id, url), err, _template_name(data))
+    if blocked:
+        why = FIELD_REASON.get("blocked:" + blocked, blocked)
+        if _template_name(data) == "fax_so":
+            # 黒ヤギ 11/2 指摘1: 同じ注文番号は二重よけ（結果の表・列の名前）で弾かれる。live では本文をどこにも残さない
+            # （受け口の決まり）ので fax_requeue（試し書きから読む）も使えない。Tukusi への送り直しなら新しい札＝新しい注文番号になる
+            how = ("現場には「FAX の原本から書いてください」と知らせました。白ヤギが戻すときは、入力途中のカルテが片付いてから "
+                   "OhiScanGo\\tools\\tukusi_resend で Tukusi に送り直します（新しい札になるので二重よけに当たらない）。"
+                   "tools\\fax_requeue.py は使えません（同じ注文番号・live では試し書きが無い）。")
+        elif _template_name(data) == "bot_s_interrupt":
+            # v3.5.0: 問い合わせは本文がどこにも残らない（受け口の決まり）。直しの再送なら新しい注文番号になる
+            how = ("現場（問い合わせ用の Chat）には「問い合わせの画面の内容から書いてください」と知らせました。"
+                   "入力途中のカルテが片付いたあと、問い合わせを直して送り直せば、新しい注文番号で書けます。")
+        else:
+            how = "入力途中のカルテが片付いてから、送り元（レントゲンナビ等）から送り直すか、手でカルテを書いてください。"   # 指摘2
+        navi_callback.notify_dx(
+            f"HOMIS ライター（GCP）: {why}。何も書かずに止めました。\n{how}"
+            f"\n{_patient_url(homis_id, '')}\norderId={order_id}",
+            order_id,
+        )
+    elif _should_notify_dx(opened, kid, err):
         _notify_dx_empty(order_id, _patient_url(homis_id, url), _template_name(data))
     failed_steps = [str(s) for s in (result.get("failed_steps") or [])]
     if result.get("success") and kid and failed_steps:
@@ -441,9 +568,8 @@ class Handler(BaseHTTPRequestHandler):
         if template not in ALLOWED_TEMPLATES:
             self._send(400, {"ok": False, "error": "unknown_template"})
             return
-        if template == "fax_so" and (
-            not str(data.get("sContent") or "") or not str(data.get("oContent") or "")
-        ):
+        if template == "fax_so" and not str(data.get("oContent") or ""):
+            # v3.5.0: S（発信元）は空でもよい。O（本文）が無いときだけ断る（11/2 札 -13・DX担当「空でいい」）
             self._send(400, {"ok": False, "error": "missing_so"})
             return
         if template == "bot_s_interrupt" and not str(data.get("sContent") or ""):
