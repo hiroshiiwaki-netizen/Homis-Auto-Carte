@@ -14,6 +14,7 @@ HOMIS・共有ドライブ・本物の Chat には触らない（shared_log は�
 from __future__ import annotations
 
 import contextlib
+import datetime
 import json
 import os
 import sys
@@ -70,14 +71,21 @@ function call(path, body) {
   var x = new XMLHttpRequest(); x.open('POST', path, false);
   x.send(JSON.stringify(body || {})); return JSON.parse(x.responseText);
 }
-function newKarte() { KID = call('/new').karte_id; document.getElementById('kind').style.display = 'block'; }
+var ACT = '', ST = '';
+function newKarte() { var r = call('/new'); KID = r.karte_id; ACT = r.act_date; ST = r.start_time;
+  document.getElementById('kind').style.display = 'block'; }
 function openLater() {
   var m = call('/mode').mode;
-  if (m === 'hidden') openForm(true); else if (m !== 'never') setTimeout(openForm, Number(m));
+  document.getElementById('form').innerHTML = '<div id="pdetail_karteedit"><input type="hidden" id="karte_id" value="' + KID +
+    '"><input type="date" id="act_date" value="' + ACT + '"><input type="text" id="start_time" value="' + ST +
+    '"><div id="inner"></div></div>';
+  if (m === 'noguard') document.getElementById('pdetail_karteedit').innerHTML = '<div id="inner"></div>';
+  if (m === 'noguard') m = '500';
+  if (m === 'hidden') openForm(true); else if (m.indexOf('never') !== 0) setTimeout(openForm, Number(m));
 }
 // hidden: 中断ボタンは出るのに S 欄だけ見えない（0017 と同じく、そのまま押すと S が空で保存される）
 function openForm(hideS) {
-  document.getElementById('form').innerHTML =
+  document.getElementById('inner').innerHTML =
     '<textarea id="subjective"' + (hideS ? ' style="display:none"' : '') + '></textarea><textarea id="objective"></textarea>' +
     '<textarea id="ap"></textarea><textarea id="ap_today"></textarea><textarea id="report"></textarea>' +
     '<a id="karteInterruption" href="#">中断</a>';
@@ -130,12 +138,18 @@ class FakeHomis:
                         if outer.editing is None:
                             outer.next_id += 1
                             outer.editing = outer.next_id
+                            outer.created[outer.editing] = outer.clock()
                             outer.news.append((outer.editing, False))
                         else:
-                            outer.news.append((outer.editing, True))   # 書きかけが戻る
-                        self._json({"karte_id": outer.editing})
+                            outer.news.append((outer.editing, True))   # 書きかけが戻る（作った時刻のまま）
+                        c = outer.created[outer.editing]
+                        self._json({"karte_id": outer.editing, "act_date": c.strftime("%Y-%m-%d"),
+                                    "start_time": c.strftime("%H:%M")})
                     elif path == "/mode":
-                        self._json({"mode": outer.modes.pop(0) if outer.modes else "500"})
+                        m = outer.modes.pop(0) if outer.modes else "500"
+                        if m == "never_old" and outer.editing is not None:
+                            outer.created[outer.editing] -= datetime.timedelta(minutes=5)
+                        self._json({"mode": m})
                     elif path == "/save":
                         outer.saves.append(body)
                         outer.editing = None
@@ -152,7 +166,8 @@ class FakeHomis:
         self.base = f"http://127.0.0.1:{self.httpd.server_address[1]}"
 
     def reset(self):
-        self.editing, self.next_id = None, 1000
+        self.editing, self.next_id, self.created = None, 1000, {}
+        self.clock = datetime.datetime.now   # 手元の PC は日本時間
         self.modes, self.news, self.saves, self.dx, self.field = [], [], [], [], []
 
 
@@ -204,6 +219,7 @@ class StopRetry(unittest.TestCase):
 
     def setUp(self):
         self.homis.reset()
+        getattr(server, "_LEFT_KIDS", {}).clear()   # v3.7.0: 覚えた番号はテストごとに空から（直す前の版でも流せるように）
 
     def write(self, oid):
         return server.write_karte({"orderId": oid, "homisId": "2277808", "template": "bot_s_interrupt", "sContent": TEXT})
@@ -255,6 +271,62 @@ class StopRetry(unittest.TestCase):
         out = self.write("BOT-1-20261104140004")
         self.assertFalse(out["success"])
         self.assertEqual(self.homis.saves, [])
+
+    # --- v3.7.0 前の書きかけの守り ---
+    def test_g1_old_leftover_is_not_written(self):
+        # 5分前に残った書きかけが新規で戻る → S を入れる前に止める・保存しない・DX と現場に知らせる
+        self.homis.editing, self.homis.next_id = 1001, 1001
+        self.homis.created[1001] = datetime.datetime.now() - datetime.timedelta(minutes=5)
+        out = self.write("BOT-1-20261104160001")
+        self.assertEqual((out["success"], out["error_type"]), (False, "blocked:reused_editing"))
+        self.assertEqual(self.homis.news, [(1001, True)])
+        self.assertEqual(self.homis.saves, [])
+        self.assertEqual(len(self.homis.dx), 1)
+        self.assertIn("カルテ 1001", self.homis.dx[0])
+        self.assertEqual(len(self.homis.field), 1)
+        self.assertIn("書きかけ", self.homis.field[0])
+
+    def test_g2_retry_of_same_order_is_allowed(self):
+        # 同じ注文の中のやり直し: 1回目の書きかけ（5分前に作ったことにする）が戻っても止めない
+        self.homis.modes = ["never_old", "500"]
+        out = self.write("BOT-1-20261104160002")
+        self.assertEqual((out["success"], out["retried"]), (True, "S欄に入力"))
+        self.assertEqual([(x["karte_id"], x["s"]) for x in self.homis.saves], [(1001, WANT)])
+
+    def test_g3_left_kid_is_blocked_even_if_recent(self):
+        # 1件目が2回とも止まり書きかけを残す → すぐ来た2件目（2分以内）は、覚えた番号で止める
+        self.homis.modes = ["never", "never"]
+        self.assertFalse(self.write("BOT-1-20261104160003")["success"])
+        self.homis.dx.clear(); self.homis.field.clear()
+        out = self.write("BOT-1-20261104160004")
+        self.assertEqual(out["error_type"], "blocked:reused_editing")
+        self.assertEqual(self.homis.saves, [])
+
+    def test_g4_midnight_new_karte_is_fine(self):
+        # 0時またぎ: 新規を押したのが 0:00:10、カルテは 11/5 0:00 → 新しいカルテとして書く
+        self.homis.clock = lambda: datetime.datetime(2026, 11, 5, 0, 0, 0)
+        keep = server._now_jst
+        server._now_jst = lambda: datetime.datetime(2026, 11, 5, 0, 0, 10)
+        try:
+            out = self.write("BOT-1-20261104160005")
+        finally:
+            server._now_jst = keep
+        self.assertTrue(out["success"])
+        self.assertEqual(len(self.homis.saves), 1)
+
+    def test_g5_unreadable_fields_still_write_and_tell_dx(self):
+        # 編集画面の欄が無い（画面が変わった）→ 止めずに書く・DX に「守りの欄が読めず」
+        self.homis.modes = ["noguard"]
+        keep = server.EDIT_FIELDS_WAIT_SEC
+        server.EDIT_FIELDS_WAIT_SEC = 1.0
+        try:
+            out = self.write("BOT-1-20261104160006")
+        finally:
+            server.EDIT_FIELDS_WAIT_SEC = keep
+        self.assertTrue(out["success"])
+        self.assertEqual(len(self.homis.saves), 1)
+        self.assertEqual(len(self.homis.dx), 1)
+        self.assertIn("守りを飛ばしました", self.homis.dx[0])
 
     def test_i4_test_order_is_quiet_for_field(self):
         # 試し書き（BOT-TEST-…）は現場に知らせない。保存しないのは同じ

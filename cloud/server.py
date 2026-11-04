@@ -2,9 +2,14 @@
 """Cloud Run 受け口（フェーズ2a＋失敗ガード）
 
 ==============================================================================
-バージョン: 3.6.0
+バージョン: 3.7.0
 最終更新: 2026/11/04
 改定履歴（新しい順・全体は docs/SPEC_v3_cloud.md 0章「モジュール別の版」）:
+  v3.7.0 11/04 前の書きかけ（ライター自身が残した編集中）が新規で戻ったら、書く前に止める（全型紙共通・DX担当「案①」）。
+               新規のあと最初の js_input の直前に、編集画面の #karte_id・#act_date・#start_time を読み、
+               日付＋開始時刻が新規を押した時刻より2分以上前、または書けずに残した番号として覚えたものなら blocked:reused_editing。
+               同じ注文の中のやり直し（v3.6.0）で1回目と同じ番号なら止めない。欄が読めなければ止めずに書き、DX に知らせる。
+               仕様 docs/FAXカルテ_検討/SPEC_ライター_編集中の守り_v0.md v0.5（黒ヤギ仕様2回）
   v3.6.0 11/04 型紙の手順に stop_on_fail があり、その手順が失敗したら、以後の手順と保存（中断・完了）を一切しない。
                ライターの中で1回だけ最初からやり直す（ライター自身が残した編集中は、同じアカウントの新規で同じカルテが戻る・
                11/2 テスト舞子 5b）。2回とも止まったら失敗（error_type stopped:unverified_input）・DX と現場（本番）に知らせる。
@@ -63,6 +68,8 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from collections import OrderedDict
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from selenium import webdriver
@@ -99,6 +106,27 @@ BLOCK_ALERT_WAIT_SEC = 2.0
 # 見つからなくても 2 秒待つだけ。誤って早く進んでも、FAX はカルテ番号なしで失敗になる（v3.4.0 の守り）
 NEW_FORM_SELECTOR = "#pdetail_karteedit #karteCompletion"
 
+# v3.7.0: 前の書きかけの守り（仕様 SPEC_ライター_編集中の守り_v0.md v0.5）
+JST = timezone(timedelta(hours=9))
+REUSED_AFTER = timedelta(minutes=2)       # 開始時刻が新規を押した時刻よりこれ以上前なら前の書きかけ（黒ヤギ仕様2回目 指摘1）
+EDIT_FIELDS_WAIT_SEC = 10.0               # 編集画面の欄が出るのを待つ上限（画面が遅いとき・0017 の型）
+# 守りを見るのは、新規のあと最初の「欄に入れる」手順の直前。select は入れない（レントゲンの「指示医を選択」は医科カルテより前）
+GUARD_BEFORE_ACTIONS = ("js_input", "input")
+# 限界: _LEFT_KIDS はプロセスの中だけ。ライターは最大3台（maxScale=3・11/4 確認）なので、別の台が残した番号は分からない
+# （そのときは時刻の判定だけで守る）
+LEFT_KIDS_MAX = 200
+_LEFT_KIDS: "OrderedDict[str, float]" = OrderedDict()   # 書けずに残したカルテの番号（プロセスの中だけ・再起動で消える）
+# 値は覚えた時刻だが、期限は無い（200件を超えて古い順に捨てられるか、再起動まで残る）。黒ヤギ実装2回目 指摘1
+_LEFT_LOCK = threading.Lock()
+_EDIT_FIELDS_JS = """
+var r = {};
+['karte_id', 'act_date', 'start_time'].forEach(function (n) {
+  var e = document.querySelector('#pdetail_karteedit #' + n);
+  r[n] = e ? String(e.value || '') : null;
+});
+return r;
+"""
+
 # v3.1.3: 途中の手順が失敗したとき、DX に「どこを確かめるか」を型紙ごとに伝える
 STEP_FAIL_HINT = {
     "xray_karte": "カルテの種別（外来）や中身",
@@ -129,6 +157,7 @@ FIELD_REASON = {
     "verify:s_mismatch": "S が送った文と違います",
     "verify:o_mismatch": "O が送った文と違います",
     "stopped:unverified_input": "S を入れたことを確かめられず、保存しませんでした",
+    "blocked:reused_editing": "前に書けずに残った書きかけのカルテが新規で戻ってきたため、書かずに止めました",
 }
 
 DX_EMPTY = {
@@ -151,6 +180,97 @@ def _reset_opened():
     _TLS.karte_opened = False
     _TLS.blocked = ""
     _TLS.stopped = ""
+    _TLS.new_pressed_at = None   # v3.7.0: 新規を押した時刻（日本時間・tz なし）
+    _TLS.edit_checked = False    # v3.7.0: この回で書きかけの守りを見たか
+    _TLS.current_kid = ""        # v3.7.0: この回で開いたカルテの番号（編集画面から）
+
+
+def _start_order():
+    """v3.7.0: 注文ごと（やり直しをまたいで残す）の印"""
+    _TLS.order_first_kid = ""    # 1回目に開いたカルテの番号（同じ注文の中のやり直しの例外）
+    _TLS.order_kids = []         # この注文で開いたカルテの番号すべて（やり直しの前の回も・黒ヤギ実装1回目 指摘1）
+    _TLS.guard_unreadable = False
+
+
+def _note_kid(kid: str) -> None:
+    """この注文で開いたカルテの番号を控える（_reset_opened では消さない）"""
+    kids = getattr(_TLS, "order_kids", None)
+    if kid and isinstance(kids, list) and kid not in kids:
+        kids.append(kid)
+
+
+def _now_jst() -> datetime:
+    return datetime.now(JST).replace(tzinfo=None)
+
+
+def remember_left(kid: str) -> None:
+    """書けずに残したカルテの番号を覚える（古い順に捨てる）"""
+    if not kid:
+        return
+    with _LEFT_LOCK:
+        _LEFT_KIDS[kid] = time.time()
+        _LEFT_KIDS.move_to_end(kid)
+        while len(_LEFT_KIDS) > LEFT_KIDS_MAX:
+            _LEFT_KIDS.popitem(last=False)
+
+
+def _is_left(kid: str) -> bool:
+    with _LEFT_LOCK:
+        return kid in _LEFT_KIDS
+
+
+def _read_edit_fields(driver) -> dict:
+    """編集画面の3つの欄を読む。出るまで EDIT_FIELDS_WAIT_SEC 待つ。読めなければ欄は None"""
+    end = time.time() + EDIT_FIELDS_WAIT_SEC
+    got = {}
+    while True:
+        try:
+            got = driver.execute_script(_EDIT_FIELDS_JS) or {}
+        except Exception:  # noqa: BLE001
+            got = {}
+        if got.get("karte_id") and got.get("act_date") and got.get("start_time"):
+            return got
+        if time.time() >= end:
+            return got
+        time.sleep(0.5)
+
+
+def _judge_reused(fields: dict, pressed_at) -> str:
+    """返り値: "reused"（前の書きかけ）／"ok"／"unreadable"（欄が読めない）"""
+    kid = str(fields.get("karte_id") or "")
+    if kid and kid == str(getattr(_TLS, "order_first_kid", "") or ""):
+        return "ok"   # 同じ注文の中のやり直しで、1回目に自分が開いたカルテ（v3.6.0）
+    if kid and _is_left(kid):
+        return "reused"
+    try:
+        started = datetime.strptime(f"{fields.get('act_date')} {str(fields.get('start_time'))[:5]}", "%Y-%m-%d %H:%M")
+    except (TypeError, ValueError):
+        return "unreadable"
+    if not kid or pressed_at is None:
+        return "unreadable"
+    # 日付＋時刻で比べる（日付だけで比べると0時またぎで誤る・黒ヤギ仕様2回目 指摘2）
+    return "reused" if pressed_at - started >= REUSED_AFTER else "ok"
+
+
+def _guard_editing(driver) -> str:
+    """v3.7.0: 新規のあと最初の入力の直前に1回だけ。前の書きかけなら blocked にして理由を返す"""
+    _TLS.edit_checked = True
+    fields = _read_edit_fields(driver)
+    verdict = _judge_reused(fields, getattr(_TLS, "new_pressed_at", None))
+    kid = str(fields.get("karte_id") or "")
+    _TLS.current_kid = kid
+    _note_kid(kid)
+    logger.info("書きかけの守り: %s karte_id=%s 開始=%s %s", verdict, kid or "-",
+                fields.get("act_date") or "-", fields.get("start_time") or "-")
+    if verdict == "reused":
+        _TLS.blocked = "reused_editing"
+        return "reused_editing"
+    if kid and not getattr(_TLS, "order_first_kid", ""):
+        # 欄の一部が読めなくても番号が読めたら控える（やり直しを誤って止めない・黒ヤギ実装1回目 指摘2）
+        _TLS.order_first_kid = kid
+    if verdict == "unreadable":
+        _TLS.guard_unreadable = True
+    return ""
 
 
 def _blocked() -> str:
@@ -193,6 +313,13 @@ def _execute_cloud(self, action, data):
     if _blocked() or _stopped():
         logger.info("止めているため手順を飛ばす: %s", action.get("name", "") if isinstance(action, dict) else "")
         return False
+    if (isinstance(action, dict) and action.get("action") in GUARD_BEFORE_ACTIONS and _opened()
+            and not getattr(_TLS, "edit_checked", False)):
+        # v3.7.0: 最初の入力の前に、前の書きかけが戻っていないかを見る（3型紙とも医科カルテのあと）。
+        # レントゲンは「診察日」「開始時間」を撮影日時に書き換えるので、その前に見ること（黒ヤギ実装1回目 指摘3）
+        if _guard_editing(self.driver):
+            logger.warning("前の書きかけが戻ったため書かずに止める: %s", action.get("name", ""))
+            return False
     ok = _orig_execute(self, action, data)
     if not ok and isinstance(action, dict) and action.get("stop_on_fail"):
         _TLS.stopped = str(action.get("name") or "stop_on_fail")
@@ -227,6 +354,7 @@ def _click_cloud(self, selector, selector_type="css", text_contains=""):
         logger.info("保存前にアラート自動OKを設定")
     out = _orig_click(self, selector, selector_type, text_contains)
     if selector == "#karteNew":
+        _TLS.new_pressed_at = _now_jst()   # v3.7.0: 書きかけの守りで比べる相手
         _TLS.karte_opened = True
         logger.info("karte_opened=1")
         # v3.4.0: 新規の画面が開かなかった知らせ（入力途中のカルテ）なら、ここで止める
@@ -385,6 +513,7 @@ def write_karte(data: dict) -> dict:
             logger.info("受付済み未完了のため書かない orderId=%s", order_id)
             return result_from_row(claimed, order_id)
         sheet_row = int(claimed.get("row") or 0)
+    _start_order()
     _reset_opened()
     result = _run_once(data)
     opened = _opened()
@@ -460,6 +589,9 @@ def write_karte(data: dict) -> dict:
                    "入力途中のカルテが片付いたあと、問い合わせを直して送り直せば、新しい注文番号で書けます。")
         else:
             how = "入力途中のカルテが片付いてから、送り元（レントゲンナビ等）から送り直すか、手でカルテを書いてください。"   # 指摘2
+        if blocked == "reused_editing":
+            how += (f"\n戻ってきたのはカルテ {getattr(_TLS, 'current_kid', '') or '（番号不明）'}"
+                    "（前にライターが書けずに残した書きかけ）。白ヤギがその日のうちに取り消します。")
         if left_editing:
             how += f"\n※1回目に「{left_editing}」を確かめられず保存せずに止めたため、ライターの書きかけ（編集中）が1枚残っています。"
         navi_callback.notify_dx(
@@ -478,6 +610,19 @@ def write_karte(data: dict) -> dict:
         )
     elif _should_notify_dx(opened, kid, err):
         _notify_dx_empty(order_id, _patient_url(homis_id, url), _template_name(data))
+    for k in list(getattr(_TLS, "order_kids", []) or []):
+        # v3.7.0: 書けずに終わったカルテの番号を覚える（次の新規で戻ったら時刻に関係なく止める）。
+        # やり直しの前の回に開いた番号も含める（黒ヤギ実装1回目 指摘1）。書けたカルテ（kid）は覚えない
+        if not result.get("success") or k != kid:
+            remember_left(k)
+    if getattr(_TLS, "guard_unreadable", False):
+        # v3.7.0: 守りの欄が読めなかった。書くのは止めないが、黙って守りが外れないよう知らせる（黒ヤギ仕様2回目 指摘3）
+        navi_callback.notify_dx(
+            "HOMIS ライター（GCP）: 前の書きかけの守りで、編集画面の欄（カルテ番号・診察日・開始時刻）が読めず、守りを飛ばしました。"
+            "HOMIS の画面が変わった見込みがあります（白ヤギが確かめます）。"
+            f"\n{_patient_url(homis_id, url)}\norderId={order_id}",
+            order_id,
+        )
     failed_steps = [str(s) for s in (result.get("failed_steps") or [])]
     if result.get("success") and kid and failed_steps:
         # v3.1.2: カルテ番号が取れても、途中の手順の失敗は黙らない（10/16 に「外来を選択」が失敗し、種別が定期のまま保存された）

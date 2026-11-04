@@ -668,6 +668,152 @@ class Phase1(unittest.TestCase):
         out = ORIG_WRITE_KARTE(self.body(oid="FAX-MIRROR-K10", template="fax_so", sContent="s", oContent="o"))
         self.assertEqual((len(runs), out["retried"]), (1, ""))
 
+    # --- v3.7.0 前の書きかけの守り（判定） ---
+    def test_g1_judge_reused(self):
+        from datetime import datetime as D
+        server._LEFT_KIDS.clear()
+        server._start_order()
+        pressed = D(2026, 11, 4, 16, 0, 20)
+        f = lambda kid, date, hm: {"karte_id": kid, "act_date": date, "start_time": hm}
+        J = server._judge_reused
+        self.assertEqual(J(f("1", "2026-11-04", "16:00"), pressed), "ok")       # 今作った
+        self.assertEqual(J(f("1", "2026-11-04", "15:59"), pressed), "ok")       # 秒の切り捨て・時計のずれ（1分20秒）
+        self.assertEqual(J(f("1", "2026-11-04", "15:58"), pressed), "reused")   # 2分20秒前
+        self.assertEqual(J(f("1", "2026-11-04", "15:44"), pressed), "reused")
+        self.assertEqual(J(f("1", "2026-11-03", "16:00"), pressed), "reused")   # 前の日
+        # 0時またぎ（日付だけで比べない）
+        self.assertEqual(J(f("1", "2026-11-05", "00:00"), D(2026, 11, 5, 0, 0, 10)), "ok")
+        self.assertEqual(J(f("1", "2026-11-04", "23:59"), D(2026, 11, 5, 0, 0, 10)), "ok")
+        self.assertEqual(J(f("1", "2026-11-04", "23:57"), D(2026, 11, 5, 0, 0, 10)), "reused")
+        # 読めない
+        self.assertEqual(J(f(None, "2026-11-04", "16:00"), pressed), "unreadable")
+        self.assertEqual(J(f("1", None, None), pressed), "unreadable")
+        self.assertEqual(J(f("1", "2026-11-04", "16:00"), None), "unreadable")
+        # 覚えた番号は時刻に関係なく止める・同じ注文の1回目の番号は止めない
+        server.remember_left("77")
+        self.assertEqual(J(f("77", "2026-11-04", "16:00"), pressed), "reused")
+        server._TLS.order_first_kid = "77"
+        self.assertEqual(J(f("77", "2026-11-04", "15:00"), pressed), "ok")
+        server._start_order(); server._LEFT_KIDS.clear()
+
+    def test_g2_left_kids_capped(self):
+        server._LEFT_KIDS.clear()
+        for i in range(server.LEFT_KIDS_MAX + 5):
+            server.remember_left(str(i))
+        self.assertEqual(len(server._LEFT_KIDS), server.LEFT_KIDS_MAX)
+        self.assertFalse(server._is_left("0"))
+        self.assertTrue(server._is_left(str(server.LEFT_KIDS_MAX + 4)))
+        server.remember_left("")
+        self.assertFalse(server._is_left(""))
+        server._LEFT_KIDS.clear()
+
+    def test_g3_guard_runs_once_before_first_input(self):
+        # 新規のあと最初の js_input の前に1回だけ。click では見ない。古ければ以後の手順を飛ばす
+        from datetime import datetime as D
+        reads = []
+        class Drv:
+            def execute_script(self, js, *a):
+                reads.append(1)
+                return {"karte_id": "9", "act_date": "2026-11-04", "start_time": "15:00"}
+        fake = types.SimpleNamespace(driver=Drv())
+        orig = server._orig_execute
+        called = []
+        server._orig_execute = lambda s, a, d: called.append(a["name"]) or True
+        try:
+            server._start_order(); server._reset_opened()
+            server._TLS.karte_opened = True
+            server._TLS.new_pressed_at = D(2026, 11, 4, 16, 0, 0)
+            self.assertTrue(server._execute_cloud(fake, {"name": "医科カルテ", "action": "click"}, {}))
+            self.assertEqual(reads, [])
+            self.assertFalse(server._execute_cloud(fake, {"name": "S欄に入力", "action": "js_input"}, {}))
+            self.assertEqual((server._blocked(), len(reads)), ("reused_editing", 1))
+            self.assertFalse(server._execute_cloud(fake, {"name": "中断ボタンで保存", "action": "click"}, {}))
+            self.assertEqual(called, ["医科カルテ"])
+            # 新しいカルテなら通す・2回目の入力では読まない
+            reads.clear(); called.clear(); server._reset_opened()
+            server._TLS.karte_opened = True
+            server._TLS.new_pressed_at = D(2026, 11, 4, 15, 0, 30)
+            self.assertTrue(server._execute_cloud(fake, {"name": "S", "action": "js_input"}, {}))
+            self.assertTrue(server._execute_cloud(fake, {"name": "O", "action": "js_input"}, {}))
+            self.assertEqual((len(reads), called, server._TLS.order_first_kid), (1, ["S", "O"], "9"))
+            # 新規を開いていなければ読まない
+            reads.clear(); server._reset_opened()
+            self.assertTrue(server._execute_cloud(fake, {"name": "S", "action": "js_input"}, {}))
+            self.assertEqual(reads, [])
+        finally:
+            server._orig_execute = orig
+            server._reset_opened(); server._start_order()
+
+    def test_g4_retry_failing_before_new_still_remembers_first(self):
+        # 黒ヤギ実装1回目 指摘1: 1回目に開いて止めた番号は、2回目が新規の前で失敗しても覚える
+        server._LEFT_KIDS.clear()
+        runs = []
+        def run(data):
+            runs.append(1)
+            if len(runs) == 1:
+                server._TLS.karte_opened = True
+                server._note_kid("55")
+                server._TLS.stopped = "S欄に入力"
+                return {"success": True, "karte_url": "", "error_type": ""}
+            return {"success": False, "karte_url": "", "error_type": "timeout"}   # 新規の前で失敗
+        server._run_once = run
+        out = ORIG_WRITE_KARTE(self.bot("BOT-TEST-123-20261104170000"))
+        self.assertFalse(out["success"])
+        self.assertTrue(server._is_left("55"))
+        # 書けたカルテは覚えない（やり直しで同じ番号に書けた）
+        server._LEFT_KIDS.clear(); runs.clear()
+        def run2(data):
+            runs.append(1)
+            server._TLS.karte_opened = True
+            server._note_kid("56")
+            if len(runs) == 1:
+                server._TLS.stopped = "S欄に入力"
+                return {"success": True, "karte_url": "", "error_type": ""}
+            return {"success": True, "karte_url": "https://homis.jp/homic/?pid=patient_detail&patient_id=2277808&karte_id=56", "error_type": ""}
+        server._run_once = run2
+        self.verify_result = dict(self.verify_result, status="2")
+        self.assertTrue(ORIG_WRITE_KARTE(self.bot("BOT-TEST-123-20261104170001"))["success"])
+        self.assertFalse(server._is_left("56"))
+        server._LEFT_KIDS.clear()
+
+    def test_g5_unreadable_time_still_keeps_first_kid(self):
+        # 黒ヤギ実装1回目 指摘2: 番号が読めて時刻が読めないとき、その番号を1回目の番号として控える
+        class Drv:
+            def execute_script(self, js, *a):
+                return {"karte_id": "88", "act_date": "", "start_time": ""}
+        server._start_order(); server._reset_opened()
+        keep = server.EDIT_FIELDS_WAIT_SEC
+        server.EDIT_FIELDS_WAIT_SEC = 0.2
+        try:
+            self.assertEqual(server._guard_editing(Drv()), "")
+        finally:
+            server.EDIT_FIELDS_WAIT_SEC = keep
+        self.assertEqual((server._TLS.order_first_kid, server._TLS.guard_unreadable, server._TLS.order_kids), ("88", True, ["88"]))
+        server._start_order(); server._reset_opened()
+
+    def test_g6_guard_also_before_input_but_not_select(self):
+        # 黒ヤギ実装1回目 指摘3: 「input」の手順の前でも見る（レントゲンの開始時間）。select（指示医）では見ない
+        from datetime import datetime as D
+        reads = []
+        class Drv:
+            def execute_script(self, js, *a):
+                reads.append(1)
+                return {"karte_id": "9", "act_date": "2026-11-04", "start_time": "16:00"}
+        fake = types.SimpleNamespace(driver=Drv())
+        orig = server._orig_execute
+        server._orig_execute = lambda s, a, d: True
+        try:
+            server._start_order(); server._reset_opened()
+            server._TLS.karte_opened = True
+            server._TLS.new_pressed_at = D(2026, 11, 4, 16, 0, 30)
+            server._execute_cloud(fake, {"name": "指示医を選択", "action": "select"}, {})
+            self.assertEqual(reads, [])
+            server._execute_cloud(fake, {"name": "開始時間を入力", "action": "input"}, {})
+            self.assertEqual(len(reads), 1)
+        finally:
+            server._orig_execute = orig
+            server._start_order(); server._reset_opened()
+
     def test_k5_bot_blocked_dx_text(self):
         self.bot_field_setup()
         def run(data):
