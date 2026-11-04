@@ -2,13 +2,15 @@
 # 仕様: docs/SPEC_v3_cloud.md §12
 # 失敗・二重防止は §7 / 2b。このファイルは手順だけ。
 # 改定履歴（新しい順・全体は docs/SPEC_v3_cloud.md 0章「モジュール別の版」）:
+#   1.2 2026/11/04 S の2手順に stop_on_fail（確かめられなければ保存しない・ライター cloud/server.py 3.6.0 が1回やり直す。
+#                  DX担当「問い合わせで S 欄が空はあかん」）
 #   1.1 2026/11/04 「電話再診を選択」に verify_checked（FAX と同じ）。S の入力に verify_value（見える欄を待つ・読み返す）。
 #                  保存の直前に「S欄をもう一度確かめる」を足した（11/4 問い合わせ 0017: 表示が遅く S が空のまま中断で保存された）
 #   1.0 2026/09/08 初版
 
 name: おひさまボットS中断
 description: おひさまボット確認後のカルテ（電話再診・Sのみ・中断）
-version: "1.1"
+version: "1.2"
 
 target_url: "https://homis.jp/homic/?pid=patient_detail&patient_id={homisId}&p=5"
 
@@ -40,6 +42,7 @@ steps:
     selector: "textarea#subjective"
     value: "{sContent}"
     verify_value: true     # 2026-11-04: 見える欄が出るまで待って入れ、読み返す
+    stop_on_fail: true     # 1.2: 確かめられなければ以後の手順と保存をしない（ライターが1回やり直す）
     wait_after: 2000
 
   - name: O欄に半角スペースを入力
@@ -71,6 +74,7 @@ steps:
     selector: "textarea#subjective"
     value: "{sContent}"
     verify_value: true     # 2026-11-04: 保存の直前にもう一度読み返す（同じなら何もしない・消えていれば入れ直す）
+    stop_on_fail: true     # 1.2: 同上
     wait_after: 500
 
   - name: 中断ボタンで保存

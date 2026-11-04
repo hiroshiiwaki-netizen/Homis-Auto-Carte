@@ -189,7 +189,7 @@ class BotFlow(unittest.TestCase):
     def test_template_version_and_steps(self):
         names = [s["name"] for s in self.tpl["steps"]]
         steps = {s["name"]: s for s in self.tpl["steps"]}
-        self.assertEqual(self.tpl["version"], "1.1")
+        self.assertEqual(self.tpl["version"], "1.2")   # 1.2: S の2手順に stop_on_fail（test_stop_retry.py で確かめる）
         self.assertTrue(steps["電話再診を選択"].get("verify_checked"))
         self.assertTrue(steps["S欄に入力"].get("verify_value"))
         # 保存の直前に S をもう一度確かめる

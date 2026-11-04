@@ -587,6 +587,87 @@ class Phase1(unittest.TestCase):
         ORIG_WRITE_KARTE(self.bot("BOT-TEST-123-20261102160003"))
         self.assertEqual(self.bot_field.calls, [])
 
+    # --- v3.6.0 stop_on_fail の手順が失敗したら保存しない・1回だけやり直す ---
+    def test_k6_stop_on_fail_skips_rest(self):
+        fake = types.SimpleNamespace()
+        orig = server._orig_execute
+        called = []
+        server._orig_execute = lambda s, a, d: called.append(a["name"]) or a.get("ok", False)
+        try:
+            server._reset_opened()
+            self.assertFalse(server._execute_cloud(fake, {"name": "O欄", "ok": False}, {}))   # 印なしの失敗は止めない
+            self.assertEqual(server._stopped(), "")
+            self.assertFalse(server._execute_cloud(fake, {"name": "S欄に入力", "stop_on_fail": True}, {}))
+            self.assertEqual(server._stopped(), "S欄に入力")
+            self.assertFalse(server._execute_cloud(fake, {"name": "中断ボタンで保存", "ok": True}, {}))   # 保存は押さない
+            self.assertEqual(called, ["O欄", "S欄に入力"])
+            server._reset_opened()
+            self.assertEqual(server._stopped(), "")                                           # 次の回には持ち越さない
+            self.assertTrue(server._execute_cloud(fake, {"name": "S欄に入力", "stop_on_fail": True, "ok": True}, {}))
+            self.assertEqual(server._stopped(), "")
+        finally:
+            server._orig_execute = orig
+            server._reset_opened()
+
+    def test_k7_stopped_once_then_ok(self):
+        runs = []
+        def run(data):
+            runs.append(1)
+            server._TLS.karte_opened = True
+            if len(runs) == 1:
+                server._TLS.stopped = "S欄に入力"
+                return {"success": True, "karte_url": "", "error_type": "step:S欄に入力"}
+            return {"success": True, "karte_url": "https://homis.jp/homic/?pid=patient_detail&patient_id=2277808&karte_id=70", "error_type": ""}
+        server._run_once = run
+        self.verify_result = dict(self.verify_result, status="2")
+        out = ORIG_WRITE_KARTE(self.bot("BOT-123-20261104140000"))
+        self.assertEqual((out["success"], out["retried"], out["karte_id"], len(runs)), (True, "S欄に入力", "70", 2))
+        self.assertEqual(self.dx.calls, [])
+
+    def test_k8_stopped_twice_is_failure(self):
+        self.bot_field_setup()
+        runs = []
+        def run(data):
+            runs.append(1)
+            server._TLS.karte_opened = True
+            server._TLS.stopped = "S欄をもう一度確かめる"
+            return {"success": True, "karte_url": "", "error_type": "step:S欄をもう一度確かめる"}
+        server._run_once = run
+        out = ORIG_WRITE_KARTE(self.bot("BOT-123-20261104140001"))
+        self.assertEqual((out["success"], out["error_type"], len(runs)), (False, "stopped:unverified_input", 2))
+        self.assertEqual(self.verify_calls, [])
+        self.assertEqual(len(self.dx.calls), 1)
+        self.assertIn("保存せずに止めました", self.dx.calls[0]["text"])
+        self.assertIn("問い合わせの画面の内容から", self.dx.calls[0]["text"])
+        self.assertEqual(len(self.bot_field.calls), 1)
+        self.assertIn("S を入れたことを確かめられず", self.bot_field.calls[0]["text"])
+
+    def test_k9_stopped_then_blocked_mentions_leftover(self):
+        runs = []
+        def run(data):
+            runs.append(1)
+            if len(runs) == 1:
+                server._TLS.karte_opened = True
+                server._TLS.stopped = "S欄に入力"
+            else:
+                server._TLS.blocked = "in_progress_karte"
+            return {"success": True, "karte_url": "", "error_type": ""}
+        server._run_once = run
+        out = ORIG_WRITE_KARTE(self.bot("BOT-123-20261104140002"))
+        self.assertEqual(out["error_type"], "blocked:in_progress_karte")
+        self.assertIn("書きかけ（編集中）が1枚残っています", self.dx.calls[-1]["text"])
+
+    def test_k10_fax_failure_does_not_retry(self):
+        # 印の無い型紙（FAX）は今までどおり1回だけ
+        runs = []
+        def run(data):
+            runs.append(1)
+            server._TLS.karte_opened = True
+            return {"success": True, "karte_url": "", "error_type": "step:S欄に入力"}
+        server._run_once = run
+        out = ORIG_WRITE_KARTE(self.body(oid="FAX-MIRROR-K10", template="fax_so", sContent="s", oContent="o"))
+        self.assertEqual((len(runs), out["retried"]), (1, ""))
+
     def test_k5_bot_blocked_dx_text(self):
         self.bot_field_setup()
         def run(data):

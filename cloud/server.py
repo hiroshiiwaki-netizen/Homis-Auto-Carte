@@ -2,9 +2,14 @@
 """Cloud Run 受け口（フェーズ2a＋失敗ガード）
 
 ==============================================================================
-バージョン: 3.5.0
-最終更新: 2026/11/02
+バージョン: 3.6.0
+最終更新: 2026/11/04
 改定履歴（新しい順・全体は docs/SPEC_v3_cloud.md 0章「モジュール別の版」）:
+  v3.6.0 11/04 型紙の手順に stop_on_fail があり、その手順が失敗したら、以後の手順と保存（中断・完了）を一切しない。
+               ライターの中で1回だけ最初からやり直す（ライター自身が残した編集中は、同じアカウントの新規で同じカルテが戻る・
+               11/2 テスト舞子 5b）。2回とも止まったら失敗（error_type stopped:unverified_input）・DX と現場（本番）に知らせる。
+               問い合わせの型紙 bot_s_interrupt 1.2 の S の2手順に使う（DX担当「問い合わせで S 欄が空はあかん」・11/4 0017）。
+               FAX・レントゲンの型紙には付けないので動きは変わらない
   v3.5.0 11/02 問い合わせ（bot_s_interrupt・注文番号 BOT-…）を本番で受けられるようにする（受け口 0.4.0 の /bot/receive から）。
                書いたあと読み直す（verify_karte 1.1.0 の expect="interrupt"＝中断・更新者がライター自身・S 一致・O 空）。
                カルテ番号が取れなければ失敗（FAX と同じ）。書けなかったら現場の知らせを型紙ごとに分ける
@@ -123,6 +128,7 @@ FIELD_REASON = {
     "verify:not_mine": "書いたカルテを確かめられませんでした（別のカルテの見込み）",
     "verify:s_mismatch": "S が送った文と違います",
     "verify:o_mismatch": "O が送った文と違います",
+    "stopped:unverified_input": "S を入れたことを確かめられず、保存しませんでした",
 }
 
 DX_EMPTY = {
@@ -144,10 +150,16 @@ DX_EMPTY = {
 def _reset_opened():
     _TLS.karte_opened = False
     _TLS.blocked = ""
+    _TLS.stopped = ""
 
 
 def _blocked() -> str:
     return str(getattr(_TLS, "blocked", "") or "")
+
+
+def _stopped() -> str:
+    """v3.6.0: stop_on_fail の手順が失敗して止めたときの手順の名前（空なら止めていない）"""
+    return str(getattr(_TLS, "stopped", "") or "")
 
 
 def _check_block_alert(driver) -> str:
@@ -176,11 +188,16 @@ def _check_block_alert(driver) -> str:
 
 
 def _execute_cloud(self, action, data):
-    """v3.4.0: 新規が開けなかった（blocked）あとは、どの手順も実行しない（S・O の入力や完了を押さない）"""
-    if _blocked():
+    """v3.4.0: 新規が開けなかった（blocked）あとは、どの手順も実行しない（S・O の入力や完了を押さない）
+    v3.6.0: stop_on_fail の手順が失敗したら、そのあとも同じく何もしない（保存しない・on_complete も飛ぶ）"""
+    if _blocked() or _stopped():
         logger.info("止めているため手順を飛ばす: %s", action.get("name", "") if isinstance(action, dict) else "")
         return False
-    return _orig_execute(self, action, data)
+    ok = _orig_execute(self, action, data)
+    if not ok and isinstance(action, dict) and action.get("stop_on_fail"):
+        _TLS.stopped = str(action.get("name") or "stop_on_fail")
+        logger.warning("確かめられない手順があるため保存せずに止める: %s", _TLS.stopped)
+    return ok
 
 
 def _opened() -> bool:
@@ -378,16 +395,31 @@ def write_karte(data: dict) -> dict:
         result = _run_once(data)
         opened = _opened()
         err = infer_error_type(result)
+    left_editing = ""
+    if _stopped():
+        # v3.6.0: 保存せずに止めた（書きかけは編集中で残る）。同じアカウントの新規で同じカルテが戻るので、1回だけやり直す
+        left_editing = _stopped()
+        logger.warning("保存せずに止めたため1回だけやり直す orderId=%s 手順=%s", order_id, left_editing)
+        _reset_opened()
+        result = _run_once(data)
+        opened = _opened()
+        err = infer_error_type(result)
     if opened and (not result.get("success") or err.startswith("step:")):
         if err != "no_karte_id":
             err = err or "opened_then_fail"
     url = result.get("karte_url") or ""
     kid = extract_karte_id(url)
     blocked = _blocked()
+    stopped = _stopped()
     if blocked:
         # v3.4.0: 新規が開けず止めた。何も保存していない（以後の手順は飛ばした）
         result["success"] = False
         err = "blocked:" + blocked
+        kid, url = "", ""
+    elif stopped:
+        # v3.6.0: やり直しでも確かめられなかった。保存していない（書きかけは編集中で残る）
+        result["success"] = False
+        err = "stopped:unverified_input"
         kid, url = "", ""
     elif _template_name(data) in ("fax_so", "bot_s_interrupt") and not kid and result.get("success"):
         # v3.4.0: カルテ番号が取れないのに成功扱いにしない（11/2 11:36 現場に知らせが出なかった）。v3.5.0: 問い合わせも同じ
@@ -428,9 +460,20 @@ def write_karte(data: dict) -> dict:
                    "入力途中のカルテが片付いたあと、問い合わせを直して送り直せば、新しい注文番号で書けます。")
         else:
             how = "入力途中のカルテが片付いてから、送り元（レントゲンナビ等）から送り直すか、手でカルテを書いてください。"   # 指摘2
+        if left_editing:
+            how += f"\n※1回目に「{left_editing}」を確かめられず保存せずに止めたため、ライターの書きかけ（編集中）が1枚残っています。"
         navi_callback.notify_dx(
             f"HOMIS ライター（GCP）: {why}。何も書かずに止めました。\n{how}"
             f"\n{_patient_url(homis_id, '')}\norderId={order_id}",
+            order_id,
+        )
+    elif stopped:
+        navi_callback.notify_dx(
+            f"HOMIS ライター（GCP）: 「{stopped}」を確かめられず、保存せずに止めました（やり直しても同じ）。"
+            "ライターの書きかけ（編集中）が1枚残っています。次にライターがこの患者さんの新規を開くと、そのカルテが戻って使われます。"
+            "残したくなければ白ヤギが取り消します。"
+            + ("現場（問い合わせ用の Chat）には「問い合わせの画面の内容から書いてください」と知らせました。" if _is_live_bot(data) else "")
+            + f"\n{_patient_url(homis_id, '')}\norderId={order_id}",
             order_id,
         )
     elif _should_notify_dx(opened, kid, err):
@@ -462,6 +505,7 @@ def write_karte(data: dict) -> dict:
         "karte_url": url,
         "failed_steps": failed_steps,
         "verify": checked["verdict"] if checked else "",
+        "retried": left_editing,   # v3.6.0: 1回目に止めた手順の名前（やり直さなかったら空）
     }
 
 
