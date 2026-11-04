@@ -4,9 +4,13 @@
 ======================
 YAMLテンプレートで指定されたアクションを実行
 
-バージョン: 1.3.0
-最終更新: 2026/10/27
+バージョン: 1.4.0
+最終更新: 2026/11/04
 改定履歴（新しい順・全体は docs/SPEC_v3_cloud.md 0章「モジュール別の版」）:
+  v1.4.0 11/04 js_input に verify_value を足した。見えている欄が出るまで最大10秒待って入れ、0.5秒おいて読み返し、
+               違えば入れ直す。入らなければ手順の失敗。見えない欄には入れない。verify_value が無い js_input は今までと同じ。
+               改行は \r\n も \r 単体も \n にそろえて比べる（黒ヤギ 11/4 指摘1）
+               （11/4 問い合わせ 0017: 画面の表示が遅く、S が見えていない欄に入り、新しいカルテの S が空のまま中断で保存された）
   v1.3.0 10/27 id などで探して押す click にも verify_checked を使えるようにした（FAX の「算定不要」チェック用）。
                押せるまで待つ・かぶさったら JavaScript で押す（onclick も動く）・押す前から印が付いていれば押さない（外れるため）・
                押したあと印が付いたかを確かめる。同じ印の部品が複数あれば見えているものを選ぶ。verify_checked が無い click は今までと同じ
@@ -74,7 +78,11 @@ class BrowserActions:
                 trigger_event = action.get("trigger_input_event", False)
                 self._action_input(selector, value, trigger_event, selector_type)
             elif action_type == "js_input":
-                self._action_js_input(selector, value)
+                if action.get("verify_value"):
+                    # v1.4.0: 見える欄が出るまで待って入れ、読み返して確かめる（11/4 問い合わせ 0017）
+                    self._js_input_verified(selector, value)
+                else:
+                    self._action_js_input(selector, value)
             elif action_type == "select":
                 self._action_select(selector, value, selector_type)
             elif action_type == "navigate":
@@ -350,7 +358,42 @@ class BrowserActions:
             }
         """, selector, value)
         logger.info(f"JavaScript入力完了: {selector}")
-    
+
+    # v1.4.0: 見えている最後の欄の値を返す（無ければ null）。want を渡すと、違うときだけ入れ直してから返す
+    _JS_VISIBLE_VALUE = """
+        const els = Array.from(document.querySelectorAll(arguments[0]))
+            .filter(el => el.offsetWidth > 0 && el.offsetHeight > 0);
+        if (!els.length) return null;
+        const el = els[els.length - 1];
+        if (arguments.length > 1 && el.value !== arguments[1]) {
+            el.scrollIntoView(); el.focus(); el.value = arguments[1];
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+        return el.value;
+    """
+
+    def _js_input_verified(self, selector: str, value: str, wait_sec: float = 10.0):
+        """見えている欄が出るまで最大 wait_sec 秒待って入れ、0.5 秒おいて読み返す。違えば入れ直す。
+        入れられなければ例外（手順の失敗）。見えない欄には入れない。記録には文字数だけ（中身は出さない）"""
+        # textarea は改行を \n にそろえる（\r 単体も。verify_karte と同じ・黒ヤギ 11/4 指摘1）
+        want = (value or "").replace("\r\n", "\n").replace("\r", "\n")
+        end = time.time() + wait_sec
+        seen = False
+        while time.time() < end:
+            got = self.driver.execute_script(self._JS_VISIBLE_VALUE, selector, want)
+            if got is not None:
+                seen = True
+                time.sleep(0.5)   # 画面の描き直しで消えていないかを、少しおいてから見る
+                again = self.driver.execute_script(self._JS_VISIBLE_VALUE, selector)
+                if again == want:
+                    logger.info(f"JavaScript入力完了（読み返し一致・{len(want)}字）: {selector}")
+                    return
+                logger.warning(f"読み返しが違うため入れ直す: {selector}")
+            else:
+                time.sleep(0.5)
+        raise RuntimeError(f"入力を確かめられませんでした: {selector}（見える欄 {'あり・値が合わない' if seen else 'なし'}）")
+
     def _action_navigate(self, url: str):
         """ページ遷移アクション"""
         self.driver.get(url)
