@@ -63,6 +63,16 @@ class FakeCloud:
                     self.send_response(503)
                     self.end_headers()
                     return
+                # v0.5.1 用: 1回目だけ遅い（slow_once＝入らない／slow_in＝実は入っていて2回目は 409）
+                if outer.mode in ("slow_once", "slow_in"):
+                    first_in = outer.mode == "slow_in"
+                    outer.mode = "dup" if first_in else "ok"
+                    if first_in:
+                        outer.tasks.append({"path": self.path, "auth": self.headers.get("Authorization"), "task": data["task"]})
+                    time.sleep(7)
+                    self.send_response(503)
+                    self.end_headers()
+                    return
                 outer.tasks.append({"path": self.path, "auth": self.headers.get("Authorization"), "task": data["task"]})
                 code = 409 if outer.mode == "dup" else 200
                 body = b"{}"
@@ -205,7 +215,7 @@ class MirrorFlow(unittest.TestCase):
         port, log = self.start()
         st, sec = self.send(port, ticket="261028090000-3")
         self.assertEqual(st, 200)
-        self.assertLess(sec, 6.5)
+        self.assertLess(sec, 12)   # v0.5.1: 時間切れは1回だけやり直す（最長 約5秒×2）
         self.assertTrue(self.records(log)[-1]["mirror"].startswith("error:"))
         self.cloud.mode = "ok"
 

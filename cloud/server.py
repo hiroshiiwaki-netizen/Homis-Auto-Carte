@@ -2,9 +2,14 @@
 """Cloud Run 受け口（フェーズ2a＋失敗ガード）
 
 ==============================================================================
-バージョン: 3.9.0
+バージョン: 3.10.0
 最終更新: 2026/11/05
 改定履歴（新しい順・全体は docs/SPEC_v3_cloud.md 0章「モジュール別の版」）:
+  v3.10.0 11/05 FAX（fax_so）の O が HOMIS の O 欄の上限（UTF-8 で 65,535 バイト）を超えるときは、行の区切りで 64,000 バイト以内に区切り、
+               末尾に「以下省略」の一言を添えて書く（DX担当「2 にしましょう」）。数えるときは改行を LF の1バイト、' を保存後の ’ の3バイトとする。
+               読み直しは区切った文と比べる。書けたら DX にだけ知らせる（現場には出さない）。11/4 札 -75 は 45,704 字で後ろ約 1,240 字が黙って捨てられていた
+               あわせて、現場と DX への知らせの先頭に出どころ【FAX・SCAN（OhiScanGo）】【問い合わせ（OhisamaBot）】【疑義照会】を付ける
+               （navi_callback 3.2.0 の source_label）。疑義照会（BOT-G-）の現場の文は「疑義照会のカルテを…」にする（DX担当 11/5）
   v3.9.0 11/05 患者さんごとの札（patient_lock.py 1.0.0・Cloud Storage の LOCK_BUCKET）。問い合わせの列を FAX と分けると別の台が同じ患者さんを
                同時に書きうる（HOMIS は同じアカウントの編集中を新規で返す）ので、結果シートの受付のあと・新規の前に札を取り、
                書き終わり（読み直し・知らせ・結果シートまで）で外す。3型紙とも。札待ちは最長 320 秒、取れなければ locked:busy、
@@ -462,6 +467,9 @@ FIELD_TARGET = {
     "bot_s_interrupt": ("BOT_FIELD_WEBHOOK", "問い合わせ（OhisamaBot）のカルテを書けませんでした（{why}）。"
                         "HOMIS でカルテを確かめ、無ければ問い合わせの画面の内容から書いてください。"),
 }
+# v3.10.0: 疑義照会（注文番号 BOT-G-…）は型紙が問い合わせと同じなので、文だけ差し替える（送り先は同じ BOT_FIELD_WEBHOOK）
+FIELD_HEAD_GIGI = ("疑義照会のカルテを書けませんでした（{why}）。"
+                   "HOMIS でカルテを確かめ、無ければ疑義照会の内容から書いてください。")
 
 
 def _notify_field(order_id: str, page_url: str, err: str, template: str = "fax_so") -> None:
@@ -472,7 +480,9 @@ def _notify_field(order_id: str, page_url: str, err: str, template: str = "fax_s
         logger.warning("%s 未設定 orderId=%s", env_name, order_id)
         return
     why = FIELD_REASON.get(err, f"書き込みに失敗しました（{err or '理由不明'}）")
-    text = head.format(why=why) + f"\n{page_url}\n注文番号 {order_id}"
+    if str(order_id).startswith("BOT-G-"):
+        head = FIELD_HEAD_GIGI
+    text = navi_callback.with_label(head.format(why=why) + f"\n{page_url}\n注文番号 {order_id}", order_id)
     body = json.dumps({"text": text}, ensure_ascii=False).encode("utf-8")
     req = urllib.request.Request(hook, data=body, headers={"Content-Type": "application/json; charset=utf-8"}, method="POST")
     try:
@@ -506,13 +516,73 @@ def _sheet_status(success: bool, kid: str) -> str:
     return "fail"
 
 
+# v3.10.0: HOMIS の O 欄の上限（UTF-8 で 65,535 バイト・超えた分は黙って捨てられる。11/4 札 -75 で確認）
+O_MAX_BYTES = 64000   # 余裕をみた上限（省略の一言を含む）
+O_CUT_NOTE = "\n\n（以下省略：書類が長いため、カルテにはここまでを書いています。全文は HOMIS に貼付した書類をご覧ください）"
+
+
+def _homis_bytes(text: str) -> int:
+    """HOMIS に保存されたときのバイト数（改行は LF・' は保存時に ’ の3バイトになる）"""
+    t = str(text or "").replace("\r\n", "\n").replace("\r", "\n").replace("'", "\u2019")
+    return len(t.encode("utf-8"))
+
+
+def cut_o_for_homis(o: str) -> tuple[str, int]:
+    """O が上限を超えるときだけ、行の区切りで上限以内に区切って省略の一言を足す。
+    返り値は（書く O・元のバイト数。区切らないときは O をそのまま・0）"""
+    text = str(o or "").replace("\r\n", "\n").replace("\r", "\n")
+    total = _homis_bytes(text)
+    if total <= O_MAX_BYTES:
+        return o, 0
+    budget = O_MAX_BYTES - _homis_bytes(O_CUT_NOTE)
+    used, keep = 0, []
+    for line in text.split("\n"):
+        need = _homis_bytes(line) + (1 if keep else 0)
+        if used + need > budget:
+            break
+        keep.append(line)
+        used += need
+    if not keep:
+        # 1行目だけで上限を超える（改行の無い長い文）: 字の区切りで切る
+        head = []
+        for ch in text:
+            b = _homis_bytes(ch)
+            if used + b > budget:
+                break
+            head.append(ch)
+            used += b
+        keep = ["".join(head)]
+    return "\n".join(keep).rstrip() + O_CUT_NOTE, total
+
+
 def write_karte(data: dict) -> dict:
     if _template_name(data) == "fax_so" and not str(data.get("sContent") or "").strip():
         # v3.5.0: S（発信元）が空だと HOMIS は完了で保存しない（11/2 テスト舞子で「編集中」のまま残った）。
         # 半角スペース1つなら完了まで保存できる（同日テスト舞子で確認）。DX担当「S が空のときは半角スペースを入れて」
         data = dict(data, sContent=" ")
+    o_cut_from = 0
+    if _template_name(data) == "fax_so":
+        cut, o_cut_from = cut_o_for_homis(str(data.get("oContent") or ""))
+        if o_cut_from:
+            data = dict(data, oContent=cut)   # 読み直しも区切った文と比べる
     order_id = str(data.get("orderId") or "")
     homis_id = str(data.get("homisId") or "")
+    if not o_cut_from:
+        return _write_karte_inner(data, order_id, homis_id)
+    logger.info("O を区切った orderId=%s 元=%sバイト 書く=%sバイト", order_id, o_cut_from, _homis_bytes(data["oContent"]))
+    result = _write_karte_inner(data, order_id, homis_id)
+    if result.get("success"):
+        navi_callback.notify_dx(
+            f"HOMIS ライター（GCP）: FAX の O（本文）が長いため（{o_cut_from:,} バイト・HOMIS の上限 65,535）、"
+            f"行の区切りで {_homis_bytes(data['oContent']):,} バイトまで書き、末尾に「以下省略」の一言を添えました。"
+            f"全文は HOMIS に貼付した書類にあります。\n{_patient_url(homis_id, result.get('karte_url') or '')}\norderId={order_id}",
+            order_id,
+        )
+    return result
+
+
+def _write_karte_inner(data: dict, order_id: str, homis_id: str) -> dict:
+    """write_karte の中身（v3.10.0 で O の区切りを入り口に足すために分けた。中身は 3.9.0 と同じ）"""
     t0 = time.time()
     sheet_row = 0
     if sheet_enabled():

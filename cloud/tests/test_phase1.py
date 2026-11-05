@@ -557,6 +557,83 @@ class Phase1(unittest.TestCase):
         ORIG_WRITE_KARTE(self.body(oid="FAX-MIRROR-S31b", template="fax_so", sContent="送り元", oContent="本文"))
         self.assertEqual(seen, ["送り元"])                                    # 中身があれば変えない
 
+    # --- v3.10.0 O が HOMIS の上限（65,535 バイト）を超えるときは行の区切りで区切る ---
+    def test_c1_short_o_is_not_cut(self):
+        o = "一行目\n二行目"
+        self.assertEqual(server.cut_o_for_homis(o), (o, 0))
+        o = "あ" * 21333   # 63,999 バイト（上限ちょうど以内）
+        self.assertEqual(server.cut_o_for_homis(o), (o, 0))
+
+    def test_c2_long_o_is_cut_at_line_with_note(self):
+        lines = [f"{i:05d} 検査値 ＊＊＊ 基準範囲内" for i in range(3000)]   # 約 10 万バイト
+        o = "\n".join(lines)
+        cut, total = server.cut_o_for_homis(o)
+        self.assertEqual(total, len(o.encode("utf-8")))
+        self.assertTrue(cut.endswith(server.O_CUT_NOTE))
+        body = cut[: -len(server.O_CUT_NOTE)]
+        self.assertTrue(o.startswith(body + "\n"))                         # 行の途中で切らない
+        self.assertLessEqual(server._homis_bytes(cut), server.O_MAX_BYTES)
+        self.assertLessEqual(server._homis_bytes(cut), 65535)
+        self.assertGreater(server._homis_bytes(cut), server.O_MAX_BYTES - 200)   # 削りすぎない
+
+    def test_c3_apostrophe_counts_as_three_bytes_and_crlf_as_one(self):
+        o = "\r\n".join(["it's " * 2000] * 10)   # ' は保存で ’（3バイト）になる
+        self.assertGreater(len(o.replace("\r\n", "\n").encode("utf-8")), 0)
+        cut, total = server.cut_o_for_homis(o)
+        self.assertEqual(total, len(o.replace("\r\n", "\n").replace("'", "’").encode("utf-8")))
+        self.assertLessEqual(len(cut.replace("'", "’").encode("utf-8")), server.O_MAX_BYTES)
+        self.assertNotIn("\r", cut)
+
+    def test_c4_one_huge_line_is_cut_by_chars(self):
+        o = "ア" * 40000   # 改行なし 12 万バイト
+        cut, total = server.cut_o_for_homis(o)
+        self.assertEqual(total, 120000)
+        self.assertTrue(cut.startswith("ア" * 100) and cut.endswith(server.O_CUT_NOTE))
+        self.assertLessEqual(server._homis_bytes(cut), server.O_MAX_BYTES)
+
+    def test_c4b_one_huge_line_with_emoji_cuts_on_char_boundary(self):
+        # 黒ヤギ 2回目: 4バイトの字（絵文字）を含む改行なしの長い1行でも、字の途中で切らず上限内に収まる
+        o = "😀あa" * 12000   # 1組 8 バイト・計 96,000 バイト
+        cut, total = server.cut_o_for_homis(o)
+        self.assertEqual(total, 96000)
+        cut.encode("utf-8")                                                   # 字の途中で切れていれば例外
+        body = cut[: -len(server.O_CUT_NOTE)]
+        self.assertTrue(o.startswith(body))
+        self.assertLessEqual(server._homis_bytes(cut), server.O_MAX_BYTES)
+
+    def test_c5_write_flow_writes_and_verifies_cut_text_and_tells_dx_only(self):
+        seen = []
+        def run(data):
+            seen.append(data.get("oContent"))
+            return {"success": True, "karte_url": "https://homis.jp/homic/?pid=patient_detail&patient_id=2277808&karte_id=77", "error_type": ""}
+        server._run_once = run
+        field = FakeNavi()
+        os.environ["FAX_FIELD_WEBHOOK"] = field.url
+        self.addCleanup(lambda: (field.close(), os.environ.pop("FAX_FIELD_WEBHOOK", None)))
+        o = "\n".join(f"{i:05d} ＣＲＰ 0.12 mg/dL" for i in range(4000))
+        out = ORIG_WRITE_KARTE(self.body(oid="FAX-T-C5", template="fax_so", sContent="送り元", oContent=o))
+        self.assertTrue(out["success"])
+        self.assertEqual(len(seen), 1)
+        self.assertTrue(seen[0].endswith(server.O_CUT_NOTE))
+        self.assertEqual(self.verify_calls[-1][3], seen[0])                   # 読み直しも区切った文と比べる
+        self.assertEqual(len(self.dx.calls), 1)
+        self.assertIn("以下省略", self.dx.calls[0]["text"])
+        self.assertIn("karte_id=77", self.dx.calls[0]["text"])
+        self.assertNotIn("ＣＲＰ", self.dx.calls[0]["text"])                  # 本文は知らせに入れない
+        self.assertEqual(field.calls, [])                                     # 現場には出さない
+
+    def test_c6_short_fax_and_xray_unchanged(self):
+        seen = []
+        def run(data):
+            seen.append(data.get("oContent"))
+            return {"success": True, "karte_url": "https://homis.jp/homic/?pid=patient_detail&patient_id=2277808&karte_id=78", "error_type": ""}
+        server._run_once = run
+        ORIG_WRITE_KARTE(self.body(oid="FAX-T-C6", template="fax_so", sContent="送り元", oContent="本文"))
+        long_x = "x" * 70000
+        ORIG_WRITE_KARTE(self.body(oid="GCP-T-C6", template="xray_karte", oContent=long_x))
+        self.assertEqual(seen, ["本文", long_x])                              # FAX 以外は区切らない
+        self.assertEqual(self.dx.calls, [])
+
     # --- v3.5.0 問い合わせ（bot_s_interrupt） ---
     def bot_field_setup(self):
         self.bot_field = FakeNavi()
@@ -584,6 +661,48 @@ class Phase1(unittest.TestCase):
         t = self.bot_field.calls[0]["text"]
         self.assertIn("問い合わせ（OhisamaBot）のカルテを書けませんでした", t)
         self.assertNotIn("FAX", t)
+
+    # --- v3.10.0・navi_callback 3.2.0 知らせの先頭に出どころ ---
+    def test_n1_source_label(self):
+        lab = server.navi_callback.source_label
+        self.assertEqual(lab("FAX-261102113620-5"), "FAX・SCAN（OhiScanGo）")
+        self.assertEqual(lab("FAX-MIRROR-261102113620-5"), "試し書き・FAX")
+        self.assertEqual(lab("BOT-G-20261105170000"), "疑義照会")
+        self.assertEqual(lab("BOT-123-20261105170000"), "問い合わせ（OhisamaBot）")
+        self.assertEqual(lab("BOT-GG-20261105170000"), "問い合わせ（OhisamaBot）")   # G だけが疑義照会
+        self.assertEqual(lab("BOT-TEST-LOCK-1"), "試し書き・問い合わせ")
+        self.assertEqual(lab("R-202611051145-306"), "レントゲン")
+        self.assertEqual(lab("GCP-T-1"), "")
+        self.assertEqual(lab(None), "")
+        w = server.navi_callback.with_label
+        self.assertEqual(w("本文", "GCP-T-1"), "本文")
+        self.assertEqual(w(w("本文", "FAX-1"), "FAX-1"), "【FAX・SCAN（OhiScanGo）】本文")   # 二重にしない
+
+    def test_n2_live_fax_failure_has_label_in_field_and_dx(self):
+        self.field_setup()
+        server._run_once = lambda data: {"success": True, "karte_url": "https://homis.jp/homic/?pid=patient_detail&patient_id=2277808&karte_id=91"}
+        self.verify_result.update(verdict="o_mismatch", status="7")
+        ORIG_WRITE_KARTE(self.live("FAX-261105152318-99"))
+        self.assertTrue(self.field.calls[0]["text"].startswith("【FAX・SCAN（OhiScanGo）】FAX のカルテを書けませんでした"))
+        self.assertTrue(self.dx.calls[0]["text"].startswith("【FAX・SCAN（OhiScanGo）】HOMIS ライター"))
+
+    def test_n3_gigi_failure_says_gigi_in_bot_space(self):
+        self.field_setup(); self.bot_field_setup()
+        server._run_once = lambda data: {"success": True, "karte_url": "https://homis.jp/homic/?pid=patient_detail&patient_id=2277808&karte_id=79", "error_type": ""}
+        self.verify_result = dict(self.verify_result, verdict="not_mine", status="2")
+        ORIG_WRITE_KARTE(self.bot("BOT-G-20261105170001"))
+        self.assertEqual(self.field.calls, [])
+        t = self.bot_field.calls[0]["text"]
+        self.assertTrue(t.startswith("【疑義照会】疑義照会のカルテを書けませんでした"))
+        self.assertNotIn("問い合わせ", t)
+        self.assertTrue(self.dx.calls[0]["text"].startswith("【疑義照会】"))
+
+    def test_n4_bot_failure_says_inquiry(self):
+        self.bot_field_setup()
+        server._run_once = lambda data: {"success": True, "karte_url": "https://homis.jp/homic/?pid=patient_detail&patient_id=2277808&karte_id=80", "error_type": ""}
+        self.verify_result = dict(self.verify_result, verdict="not_mine", status="2")
+        ORIG_WRITE_KARTE(self.bot("BOT-123-20261105170002"))
+        self.assertTrue(self.bot_field.calls[0]["text"].startswith("【問い合わせ（OhisamaBot）】問い合わせ（OhisamaBot）のカルテを書けませんでした"))
 
     def test_k3_bot_without_karte_id_is_failure(self):
         self.bot_field_setup()

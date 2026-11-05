@@ -142,6 +142,26 @@ class BotFlow(LiveFlow):
         self.check_skip(log, "skip:id_mismatch")
         self.assertEqual(self.last_bot(log)["patient_check"], "mismatch")
 
+    def test_b5b_labels_inquiry_and_gigi(self):
+        # v0.5.2: 知らせの先頭に出どころ。疑義照会（id=G）は文も「疑義照会のカルテ」
+        port, log = self.start_bot()
+        self.send_bot(port, homis_id="7654321")
+        for _, text in self.chat.texts:
+            self.assertTrue(text.startswith("【問い合わせ（OhisamaBot）】問い合わせのカルテを書けませんでした"))
+        self.chat.texts.clear()
+        self.send_bot(port, inquiry="G", homis_id="7654321")
+        self.assertEqual(sorted(p for p, _ in self.chat.texts), ["/bot", "/dx"])
+        for _, text in self.chat.texts:
+            self.assertTrue(text.startswith("【疑義照会】疑義照会のカルテを書けませんでした"))
+            self.assertIn("BOT-G-", text)
+            self.assertNotIn("問い合わせ", text)
+            for w in ("YYQ", "1234567", "7654321"):
+                self.assertNotIn(w, text)
+        self.chat.texts.clear()
+        self.send_bot(port, inquiry="G", sent_at="", homis_id="7654321")   # 番号が作れないときも疑義照会
+        for _, text in self.chat.texts:
+            self.assertTrue(text.startswith("【疑義照会】"))
+
     def test_b6_patient_missing(self):
         port, log = self.start_bot()
         self.send_bot(port, homis_id="")
@@ -191,7 +211,7 @@ class BotFlow(LiveFlow):
         self.cloud.mode = "down"
         st, _, sec = self.send_bot(port)
         self.assertEqual(st, 200)
-        self.assertLess(sec, 6.5)
+        self.assertLess(sec, 12)   # v0.5.1: 時間切れは1回だけやり直す（最長 約5秒×2）
         self.assertTrue(self.last_bot(log)["result"].startswith("error:"))
         self.assertEqual(len(self.chat.texts), 2)
         self.cloud.mode = "ok"

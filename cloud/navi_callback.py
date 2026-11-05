@@ -2,9 +2,11 @@
 """ナビ（レントゲンナビ GAS）への知らせ
 
 ==============================================================================
-バージョン: 3.1.0
-最終更新: 2026/10/15
+バージョン: 3.2.0
+最終更新: 2026/11/05
 改定履歴（新しい順・全体は docs/SPEC_v3_cloud.md 0章「モジュール別の版」）:
+  v3.2.0 11/05 DX への知らせの先頭に、注文番号から決めた出どころ【FAX・SCAN（OhiScanGo）】【問い合わせ（OhisamaBot）】【疑義照会】
+               【レントゲン】【試し書き】を付ける（source_label・with_label。DX担当「エラーが流れてくるときにわかるように」）
   v3.1.0 10/15 新規。書き終えたらナビの doPost に知らせる（垂水 Python の gas_api.py と同じ形）
                ・集団の確かめ役（checkGroupComplete）を中継（GCP 移行計画 v0.4 フェーズ1）
 ==============================================================================
@@ -90,7 +92,34 @@ def _dx_hook() -> str:
     return (os.environ.get("DX_ALERT_WEBHOOK", "") or os.environ.get("DX_EMPTY_KARTE_WEBHOOK", "")).strip()
 
 
+def source_label(order_id) -> str:
+    """v3.2.0: 注文番号から出どころの名前を決める。知らない形なら空（何も付けない）"""
+    o = str(order_id or "")
+    if o.startswith("FAX-MIRROR-"):
+        return "試し書き・FAX"
+    if o.startswith("FAX-"):
+        return "FAX・SCAN（OhiScanGo）"
+    if o.startswith("BOT-TEST-"):
+        return "試し書き・問い合わせ"
+    if o.startswith("BOT-G-"):
+        return "疑義照会"   # 疑義照会の WF は id="G" 固定で /bot/receive に送る（11/5 付け替え）
+    if o.startswith("BOT-"):
+        return "問い合わせ（OhisamaBot）"
+    if o.startswith("R-"):
+        return "レントゲン"
+    return ""
+
+
+def with_label(text: str, order_id) -> str:
+    """v3.2.0: 文の先頭に【出どころ】を付ける（もう付いていれば二重にしない）"""
+    label = source_label(order_id)
+    if not label or str(text).startswith(f"【{label}】"):
+        return text
+    return f"【{label}】{text}"
+
+
 def notify_dx(text: str, order_id: str = "") -> None:
+    text = with_label(text, order_id)
     hook = _dx_hook()
     if not hook:
         logger.warning("DX webhook 未設定 orderId=%s", order_id)

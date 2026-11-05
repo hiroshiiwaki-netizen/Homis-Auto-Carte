@@ -175,6 +175,17 @@ class VerifyKarte(unittest.TestCase):
         self.h.karte_script = [karte(s=text, o=text)]
         self.assertEqual(self.run_v(s=text, o=text)["verdict"], "ok")
 
+    def test_v7c_apostrophe_becomes_right_quote(self):
+        # 11/5: HOMIS は保存のとき ' を ’ に置き換える（テスト舞子で確認）。送ったとおりなら ok
+        sent = "Dr. O'Brien's report 'normal'"
+        self.h.karte_script = [karte(s=sent.replace("'", "’"), o="x\n" + sent.replace("'", "’"))]
+        self.assertEqual(self.run_v(s=sent, o="x\n" + sent)["verdict"], "ok")
+
+    def test_v7d_other_quote_change_is_still_mismatch(self):
+        # そろえるのは ' と ’ だけ。" が “ に変わったら見逃さない
+        self.h.karte_script = [karte(o='a "b"'.replace('"', "“"))]
+        self.assertEqual(self.run_v(o='a "b"')["verdict"], "o_mismatch")
+
     def test_v12_no_karte_id_is_unverified(self):
         r = verify_karte.verify("2277808", "", "s", "o")
         self.assertEqual((r["verdict"], r["reason"]), ("unverified", "no_input"))

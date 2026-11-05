@@ -207,9 +207,54 @@ class LiveFlow(MirrorFlow):
         self.cloud.mode = "down"
         st, _, sec = self.send_live(port, ticket="261029090000-7")
         self.assertEqual(st, 200)
-        self.assertLess(sec, 6.5)
+        self.assertLess(sec, 12)   # v0.5.1: 時間切れは1回だけやり直すので最長 約5秒×2（受け口の上限 30 秒・Tukusi は 5 分）
         self.assertTrue(self.last(log)["live"].startswith("error:"))
         self.assertEqual(len(self.chat.texts), 2)
+        self.cloud.mode = "ok"
+
+    def test_l7e_failure_text_has_fax_label(self):
+        # v0.5.2: 知らせの先頭に出どころ
+        port, log = self.start_live()
+        self.send_live(port, ticket="261029090000-74", o="")
+        self.assertEqual(len(self.chat.texts), 2)
+        for _, text in self.chat.texts:
+            self.assertTrue(text.startswith("【FAX・SCAN（OhiScanGo）】FAX のカルテを書けませんでした"))
+
+    def test_l7b_timeout_once_then_queued(self):
+        # v0.5.1: 11/5 札 -48 の形。1回目が時間切れでも、やり直しで列に入り、知らせは出ない
+        port, log = self.start_live()
+        self.cloud.mode = "slow_once"
+        st, _, sec = self.send_live(port, ticket="261029090000-71")
+        self.assertEqual(st, 200)
+        self.assertLess(sec, 12)
+        self.assertEqual(self.last(log)["live"], "queued")
+        self.assertEqual(len(self.cloud.tasks), 1)
+        self.assertEqual(self.cloud.tasks[0]["task"]["name"], LIVE_Q + "/tasks/FAX-261029090000-71")
+        self.assertEqual(self.chat.texts, [])
+        retry = [r for r in self.records(log) if r.get("event") == "enqueue_retry"]
+        self.assertEqual([(r["first"], r["again"]) for r in retry], [("error:TimeoutError", "queued")])
+        self.assert_no_secret_in_log(log)
+        self.cloud.mode = "ok"
+
+    def test_l7c_timeout_but_actually_in_is_not_doubled(self):
+        # 1回目が実は入っていた → 2回目は 409（duplicate）。仕事は1つだけ・知らせは出ない
+        port, log = self.start_live()
+        self.cloud.mode = "slow_in"
+        st, _, _ = self.send_live(port, ticket="261029090000-72")
+        self.assertEqual(st, 200)
+        self.assertEqual(self.last(log)["live"], "duplicate")
+        # 偽の列は 409 の呼び出しも記録する（本物は 409 なら入れない）。同じ名前＝同じ仕事であることを見る
+        self.assertEqual({t["task"]["name"] for t in self.cloud.tasks}, {LIVE_Q + "/tasks/FAX-261029090000-72"})
+        self.assertEqual(self.chat.texts, [])
+        self.cloud.mode = "ok"
+
+    def test_l7d_http_error_is_not_retried(self):
+        # HTTP の返事がある失敗はやり直さない（409＝同じ札がもう列にある は1回で duplicate）
+        port, log = self.start_live()
+        self.cloud.mode = "dup"
+        self.send_live(port, ticket="261029090000-73")
+        self.assertEqual(len(self.cloud.tasks), 1)
+        self.assertEqual([r for r in self.records(log) if r.get("event") == "enqueue_retry"], [])
         self.cloud.mode = "ok"
 
     def test_l8_chat_hang_does_not_block_tukusi(self):

@@ -2,9 +2,14 @@
 """FAX カルテの受け口（横付けで受け取るだけ・段1）
 
 ==============================================================================
-バージョン: 0.5.0
+バージョン: 0.5.2
 最終更新: 2026/11/05
 改定履歴（新しい順・全体は docs/SPEC_v3_cloud.md 0章「モジュール別の版」）:
+  v0.5.2 11/05 知らせの先頭に出どころを付ける（DX担当「エラーが流れてくるときにわかるように」）。FAX は【FAX・SCAN（OhiScanGo）】、
+               問い合わせは【問い合わせ（OhisamaBot）】、疑義照会（id=G・注文番号 BOT-G-…）は【疑義照会】で文も「疑義照会のカルテを…」
+  v0.5.1 11/05 列に入れるとき、時間切れ・通信の失敗（HTTP の返事が無い）なら、すぐに1回だけやり直す（17:49 札 -48 が
+               error:TimeoutError で書かれなかった・本番開始から初めて）。同じ札の名前なので二重にはならない（409＝duplicate）。
+               やり直したら event=enqueue_retry を1行記録。HTTP の返事があった失敗はやり直さない。知らせの中身は変えない
   v0.5.0 11/05 問い合わせの列を FAX と分ける準備（仕様 docs/FAXカルテ_検討/SPEC_問い合わせの列を分ける_v0.md v0.3・DX担当「案2」）。
                ①仕事（FAX・問い合わせ・試し書きとも）に dispatchDeadline "900s" を付ける（task の直下・文字列。黒ヤギ仕様2回目 指摘2）。
                  ライターが患者さんごとの札を待てるようになると最長 600 秒かかるため、Cloud Tasks の既定 600 秒だと先に切られる。
@@ -72,7 +77,7 @@ import unicodedata
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "0.5.0"
+VERSION = "0.5.2"
 MAX_BODY = 256 * 1024          # 受け取る本文の上限（バイト）
 READ_TIMEOUT = 10.0            # 1回の読み込みを待つ上限（秒）。少しずつ送る相手で箱がふさがらないように
 LABEL_MAX = 40                 # source・doc_type・route を記録する最大の長さ
@@ -172,7 +177,29 @@ def enqueue_mirror(ticket: str, s, o) -> str:
 
 
 def _post_task(queue: str, task: dict) -> str:
-    """仕事を列に入れる。queued／duplicate（同じ名前＝同じ札の2回目）／error:…。例外は外に出さない"""
+    """仕事を列に入れる。queued／duplicate（同じ名前＝同じ札の2回目）／error:…。例外は外に出さない
+    v0.5.1: 時間切れ・通信の失敗（HTTP の返事が無い）のときだけ、すぐに1回やり直す（11/5 17:49 札 -48 が 6.5 秒で
+    error:TimeoutError になり、カルテが書かれなかった）。仕事の名前は札で決まるので、1回目が実は入っていても
+    2回目は 409（duplicate）で止まり、二重にならない。HTTP の返事があった失敗（4xx・5xx）はやり直さない。
+    最長はおよそ 5 秒×2（受け口の Cloud Run の上限 30 秒・Tukusi の待ちの上限 5 分に収まる）"""
+    word = _post_task_once(queue, task)
+    if word.startswith("error:") and not word.startswith("error:http"):
+        again = _post_task_once(queue, task)
+        _log_retry(word, again)
+        return again
+    return word
+
+
+def _log_retry(first: str, again: str) -> None:
+    """やり直したことを1行だけ記録（言葉だけ・本文や札の中身は入れない）"""
+    try:
+        log_line({"event": "enqueue_retry", "first": first, "again": again, "version": VERSION})
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _post_task_once(queue: str, task: dict) -> str:
+    """列に1回だけ入れてみる（_post_task の中身）"""
     try:
         base = os.environ.get("CLOUD_TASKS_BASE", "https://cloudtasks.googleapis.com/v2/")
         url = base.rstrip("/") + "/" + queue + "/tasks"
@@ -230,7 +257,7 @@ def extract_homis_id(value) -> str:
 def notify_live_failure(ticket: str, reason: str) -> None:
     """仕事にできなかったことを、現場用と DX に知らせる。札番号と理由だけ（患者番号・本文は入れない）。例外は外に出さない"""
     why = LIVE_REASON_TEXT.get(reason.split(":", 1)[0], reason)
-    text = (f"FAX のカルテを書けませんでした（受け口・{why}）。\n札 {ticket or '（なし）'}\n"
+    text = (f"【FAX・SCAN（OhiScanGo）】FAX のカルテを書けませんでした（受け口・{why}）。\n札 {ticket or '（なし）'}\n"
             "白ヤギが札の記録から患者さんを確かめます。FAX の原本を見て、カルテを確かめてください。")
     for name in ("FAX_FIELD_WEBHOOK", "DX_ALERT_WEBHOOK"):
         hook = os.environ.get(name, "").strip()
@@ -316,8 +343,14 @@ def bot_order_id(inquiry_id, sent_at) -> tuple[str, str]:
 def notify_bot_failure(order_hint: str, reason: str) -> None:
     """仕事にできなかったことを、問い合わせ用の Chat と DX に知らせる。番号と理由だけ（患者番号・本文は入れない）"""
     why = BOT_REASON_TEXT.get(reason.split(":", 1)[0], reason)
-    text = (f"問い合わせのカルテを書けませんでした（受け口・{why}）。\n{order_hint or '（番号なし）'}\n"
-            "問い合わせの画面の内容を見て、HOMIS のカルテを確かめてください。")
+    hint = str(order_hint or "")
+    if hint.startswith("BOT-G-") or hint == "問い合わせ番号 G":
+        # v0.5.2: 疑義照会（WF は id="G" 固定）。番号が作れなかったときの「問い合わせ番号 G」も同じ扱い
+        text = (f"【疑義照会】疑義照会のカルテを書けませんでした（受け口・{why}）。\n{hint}\n"
+                "疑義照会の内容を見て、HOMIS のカルテを確かめてください。")
+    else:
+        text = (f"【問い合わせ（OhisamaBot）】問い合わせのカルテを書けませんでした（受け口・{why}）。\n{hint or '（番号なし）'}\n"
+                "問い合わせの画面の内容を見て、HOMIS のカルテを確かめてください。")
     for name in ("BOT_FIELD_WEBHOOK", "DX_ALERT_WEBHOOK"):
         hook = os.environ.get(name, "").strip()
         if not hook:
