@@ -34,7 +34,7 @@ FAX カルテの受け口（cloud_fax_receiver/・別の Cloud Run・仕様 `doc
 
 | ファイル | 版 | 最終更新 | 役割 |
 |---|---|---|---|
-| cloud_fax_receiver/server.py | 0.5.0（本番 00011-bhn・11/5 15:0x。BOT_MODE=live・BOT_QUEUE はまだ空） | 2026/11/05 | 段1: Tukusi WF1573 の横付けから受け取り、様子だけ記録。0.2.0（段1b）: FAX_MIRROR=on のとき同じ中身をテスト舞子あての仕事として列 homis-fax-mirror に入れる。0.3.0（段3）: FAX_MODE＝off／mirror／live。live は本物の患者さんあての仕事を列 homis-fax-writer へ・仕事にできなければ現場と DX に知らせる。0.4.0: 問い合わせの口 /bot/receive（BOT_MODE＝off／test／live・既定 off）。0.5.0: 仕事に dispatchDeadline 900s・問い合わせは BOT_QUEUE（空なら LIVE_QUEUE） |
+| cloud_fax_receiver/server.py | 0.5.0（本番 00012-bdg・11/5 15:17。BOT_MODE=live・BOT_QUEUE=homis-bot-writer） | 2026/11/05 | 段1: Tukusi WF1573 の横付けから受け取り、様子だけ記録。0.2.0（段1b）: FAX_MIRROR=on のとき同じ中身をテスト舞子あての仕事として列 homis-fax-mirror に入れる。0.3.0（段3）: FAX_MODE＝off／mirror／live。live は本物の患者さんあての仕事を列 homis-fax-writer へ・仕事にできなければ現場と DX に知らせる。0.4.0: 問い合わせの口 /bot/receive（BOT_MODE＝off／test／live・既定 off）。0.5.0: 仕事に dispatchDeadline 900s・問い合わせは BOT_QUEUE（空なら LIVE_QUEUE） |
 | tools/fax_requeue.py | 0.1.1 | 2026/10/29 | 段3 の切り替えの間に来た FAX を、札番号→p281 の札の記録で患者さん→試し書きの S・O→本物に同じものが無いのを見てから列に入れる（既定は見るだけ・--go で入れる） |
 | tools/compare_fax_mirror.py | 0.1.0 | 2026/10/28 | 試し書き（テスト舞子）と Tukusi の本物のカルテを HOMIS の表示専用ページで読み、S・O が同じか比べる（読むだけ・結果は札番号の末尾と一致／不一致だけ） |
 | tools/fax_shadow_reconcile.py | 0.1.3 | 2026/10/26 | 受け口のログと p281 の「カルテ順番札」を札番号で突き合わせる（読むだけ） |
@@ -77,7 +77,7 @@ FAX カルテの受け口（cloud_fax_receiver/・別の Cloud Run・仕様 `doc
 
 | イメージ | 日付 | 版 | 中身 |
 |---|---|---|---|
-| `homis-fax-receiver:v0.5.0` | 2026/11/05 15:0x | 受け口 v0.5.0（commit ba49c54） | リビジョン 00011-bhn。仕事に dispatchDeadline 900s・問い合わせは BOT_QUEUE（まだ空＝LIVE_QUEUE）。/health 0.5.0 確認。黒ヤギ【進めてよい】（指摘1・2 は 0.5.1 の宿題） |
+| `homis-fax-receiver:v0.5.0` | 2026/11/05 15:0x | 受け口 v0.5.0（commit ba49c54） | リビジョン 00011-bhn。仕事に dispatchDeadline 900s・問い合わせは BOT_QUEUE（まだ空＝LIVE_QUEUE）。/health 0.5.0 確認。黒ヤギ【進めてよい】（指摘1・2 は 0.5.1 の宿題）。15:17 列 homis-bot-writer を作り（同時1・maxAttempts 1・1件/秒・fax-receiver に cloudtasks.enqueuer）BOT_QUEUE を足して 00012-bdg＝問い合わせが別の列に |
 | `homis-fax-receiver:v0.1.2` | 2026/10/26 14:04 | 受け口 v0.1.2（commit d4b2508） | リビジョン homis-fax-receiver-00001-dnm。黒ヤギ実装レビュー6回目【進めてよい】・security-check 問題なし。確認: /health 200（0.1.2）・合言葉なし 401・違う 401・ほかの入口 404・正しい合言葉のダミー 200・起動の記録 key_configured true・ダミーの記録に本文と番号なし。WF1573 にはまだ横付けしていない |
 
 ### 0.3 Cloud Run のデプロイ履歴（`homis-karte-writer`・東京）
