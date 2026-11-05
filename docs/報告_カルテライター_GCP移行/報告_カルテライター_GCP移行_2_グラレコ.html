@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>カルテの書き道を Tukusi から GCP へ（2 グラレコ）</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Yusei+Magic&amp;family=Klee+One:wght@400;600&amp;display=swap" rel="stylesheet">
+<style>
+  html,body{margin:0;background:#f1ebde;font-family:'Yusei Magic','Klee One','BIZ UDPGothic','Meiryo',sans-serif}
+  .sheet{max-width:1684px;margin:0 auto;padding:10px}
+  svg{width:100%;height:auto;display:block;background:#fffdf6;box-shadow:0 2px 14px rgba(0,0,0,.18)}
+  .note{max-width:1684px;margin:6px auto 14px;padding:0 12px;color:#5b616b;font-size:14px}
+  @page{size:A4 landscape;margin:0}
+  @media print{html,body{background:#fff}.sheet{padding:0;max-width:none}svg{box-shadow:none}.note{display:none}}
+</style>
+</head>
+<body>
+<div class="sheet">
+<svg id="page2" viewBox="0 0 1684 1190" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="カルテの書き道を Tukusi から GCP へ変えた報告 2枚目 苦労したところとよいところ"
+     font-family="'Yusei Magic','Klee One','BIZ UDPGothic','Meiryo',sans-serif">
+  <defs>
+    <filter id="rough" x="-2%" y="-2%" width="104%" height="104%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.02" numOctaves="2" seed="7" result="n"/>
+      <feDisplacementMap in="SourceGraphic" in2="n" scale="2.2" xChannelSelector="R" yChannelSelector="G"/>
+    </filter>
+    <marker id="hand" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="10" markerHeight="10" orient="auto-start-reverse">
+      <path d="M1,1 L9,5 L1,9" fill="none" stroke="#3b3b3b" stroke-width="1.6" stroke-linecap="round"/>
+    </marker>
+  </defs>
+
+  <!-- 題 -->
+  <g filter="url(#rough)">
+    <path d="M40,28 L1060,24 L1064,98 L44,104 Z" fill="#ffe8a3" stroke="#3b3b3b" stroke-width="2.5" stroke-linejoin="round"/>
+  </g>
+  <text x="70" y="78" font-size="38" fill="#2b2b2b">Tukusi から GCP へ ─ 苦労したところ と よいところ</text>
+  <text x="1636" y="52" font-size="20" fill="#6b6b6b" text-anchor="end">2 / 2　2026-11-05　DX推進部（法人内）</text>
+  <text x="1636" y="80" font-size="17" fill="#6b6b6b" text-anchor="end">実装: Claude Code（白ヤギ）／査読: Antigravity（黒ヤギ）／判断: DX推進部</text>
+
+  <!-- 道のり -->
+  <g stroke="#3b3b3b" stroke-width="3" fill="none" stroke-linecap="round">
+    <path d="M70,170 C300,150 500,190 760,168 S1300,150 1600,172" filter="url(#rough)" marker-end="url(#hand)"/>
+  </g>
+  <g font-size="19" fill="#2b2b2b" text-anchor="middle">
+    <g><circle cx="130" cy="166" r="12" fill="#ffd43b" stroke="#3b3b3b" stroke-width="2"/><text x="130" y="212">10/26</text><text x="130" y="236" font-size="17" fill="#555">受け口を横付け</text><text x="130" y="258" font-size="17" fill="#555">（受け取るだけ）</text></g>
+    <g><circle cx="400" cy="172" r="12" fill="#ffd43b" stroke="#3b3b3b" stroke-width="2"/><text x="400" y="212">10/28〜29</text><text x="400" y="236" font-size="17" fill="#555">テスト舞子に試し書き</text><text x="400" y="258" font-size="17" fill="#555">書いたあと読み直す</text></g>
+    <g><circle cx="700" cy="168" r="12" fill="#ff8787" stroke="#3b3b3b" stroke-width="2"/><text x="700" y="212">11/2（月）</text><text x="700" y="236" font-size="17" fill="#555">FAX を本番に</text><text x="700" y="258" font-size="17" fill="#555">初日 夕方まで 22 件中 20 件</text></g>
+    <g><circle cx="1000" cy="160" r="12" fill="#ffd43b" stroke="#3b3b3b" stroke-width="2"/><text x="1000" y="212">11/4</text><text x="1000" y="236" font-size="17" fill="#555">問い合わせを並走で試験</text><text x="1000" y="258" font-size="17" fill="#555">課題 3 つを当日中に対策</text></g>
+    <g><circle cx="1300" cy="158" r="12" fill="#ff8787" stroke="#3b3b3b" stroke-width="2"/><text x="1300" y="212">11/5 13:24</text><text x="1300" y="236" font-size="17" fill="#555">問い合わせも本番に</text><text x="1300" y="258" font-size="17" fill="#555">15:17 列を分けた</text></g>
+    <g><circle cx="1560" cy="170" r="12" fill="#8ce99a" stroke="#3b3b3b" stroke-width="2"/><text x="1560" y="212">これから</text><text x="1560" y="236" font-size="17" fill="#555">毎朝の点検で確認</text></g>
+  </g>
+
+  <!-- 苦労したところ -->
+  <g filter="url(#rough)">
+    <path d="M48,300 L820,296 L824,890 L52,894 Z" fill="#fff" stroke="#3b3b3b" stroke-width="2.5" stroke-linejoin="round"/>
+  </g>
+  <text x="80" y="346" font-size="32" fill="#c92a2a">乗り越えた課題（HOMIS の画面の動きへの対策）</text>
+  <g font-size="21" fill="#2b2b2b">
+    <g>
+      <path d="M80,370 L800,370" stroke="#e9c9c9" stroke-width="2"/>
+      <text x="84" y="406" font-size="24" fill="#c92a2a">① S 欄が空のまま保存された（11/4 の 1 件）</text>
+      <text x="100" y="438">画面が遅い日に、見えていない欄へ文字が入った。</text>
+      <text x="100" y="468" fill="#1c7ed6">→ 見える欄を待つ・読み返す・確かめられなければ保存しない。</text>
+    </g>
+    <g>
+      <path d="M80,492 L800,492" stroke="#e9c9c9" stroke-width="2"/>
+      <text x="84" y="528" font-size="24" fill="#c92a2a">② 「入力途中のカルテが存在します」で新規が開かない</text>
+      <text x="100" y="560">職員さんが同じ患者さんのカルテを開いていると起きる。</text>
+      <text x="100" y="590" fill="#1c7ed6">→ 止めて知らせる → 今は 90 秒待って 1 回だけやり直す。</text>
+    </g>
+    <g>
+      <path d="M80,614 L800,614" stroke="#e9c9c9" stroke-width="2"/>
+      <text x="84" y="650" font-size="24" fill="#c92a2a">③ 同じアカウントの書きかけが「新規」で戻ってくる</text>
+      <text x="100" y="682">これまで起きていた上書きの原因。前の書きかけに別の本文が混ざる。</text>
+      <text x="100" y="712" fill="#1c7ed6">→ 2 分より前の書きかけが戻ったら書かない。</text>
+    </g>
+    <g>
+      <path d="M80,736 L800,736" stroke="#e9c9c9" stroke-width="2"/>
+      <text x="84" y="772" font-size="24" fill="#c92a2a">④ 同じ患者さんを 2 台で同時に書くおそれ</text>
+      <text x="100" y="804">FAX と問い合わせの列を分けると起きうる。</text>
+      <text x="100" y="834" fill="#1c7ed6">→ 患者さんごとの「札」を Cloud Storage に置き、1 台ずつ書く。</text>
+      <text x="100" y="866" font-size="18" fill="#6b6b6b">（本番で確認: FAX が 48 秒で書く間、問い合わせは 46 秒待って別のカルテに）</text>
+    </g>
+  </g>
+
+  <!-- よいところ -->
+  <g filter="url(#rough)">
+    <path d="M864,300 L1636,296 L1640,890 L868,894 Z" fill="#fff" stroke="#3b3b3b" stroke-width="2.5" stroke-linejoin="round"/>
+  </g>
+  <text x="896" y="346" font-size="32" fill="#2b8a3e">移行してよくなったところ</text>
+  <g font-size="21" fill="#2b2b2b">
+    <g>
+      <circle cx="916" cy="398" r="14" fill="#8ce99a" stroke="#3b3b3b" stroke-width="2"/><text x="916" y="405" font-size="18" text-anchor="middle">1</text>
+      <text x="944" y="406" font-size="24" fill="#2b8a3e">書いたあと、読み直して確かめる</text>
+      <text x="944" y="438">完了か・S と O が送ったとおりか。合わなければ失敗にする。</text>
+    </g>
+    <g>
+      <circle cx="916" cy="486" r="14" fill="#8ce99a" stroke="#3b3b3b" stroke-width="2"/><text x="916" y="493" font-size="18" text-anchor="middle">2</text>
+      <text x="944" y="494" font-size="24" fill="#2b8a3e">書けなければ 1 分以内に通知</text>
+      <text x="944" y="526">現場の Chat（直リンク付き）と DX の Chat へ通知し、見逃しを防ぐ。</text>
+    </g>
+    <g>
+      <circle cx="916" cy="574" r="14" fill="#8ce99a" stroke="#3b3b3b" stroke-width="2"/><text x="916" y="581" font-size="18" text-anchor="middle">3</text>
+      <text x="944" y="582" font-size="24" fill="#2b8a3e">カルテを書く処理を p281 から切り離した</text>
+      <text x="944" y="614">p281 のブラウザ操作が詰まっても、書き込み側はクラウドで動き続ける。</text>
+    </g>
+    <g>
+      <circle cx="916" cy="662" r="14" fill="#8ce99a" stroke="#3b3b3b" stroke-width="2"/><text x="916" y="669" font-size="18" text-anchor="middle">4</text>
+      <text x="944" y="670" font-size="24" fill="#2b8a3e">1 件 50 秒・順番に・記録が残る</text>
+      <text x="944" y="702">列で 1 件ずつ。結果の表とログで、いつ何を書いたか追える。</text>
+    </g>
+    <g>
+      <circle cx="916" cy="750" r="14" fill="#8ce99a" stroke="#3b3b3b" stroke-width="2"/><text x="916" y="757" font-size="18" text-anchor="middle">5</text>
+      <text x="944" y="758" font-size="24" fill="#2b8a3e">直すときは、テストと査読を通す</text>
+      <text x="944" y="790">自動テスト 182 件と事前の査読を通してから反映。</text>
+      <text x="944" y="820">本番を止めずに、細かな改善を段階的に反映できる体制に。</text>
+    </g>
+    <text x="944" y="866" font-size="18" fill="#6b6b6b">※ 患者さんの情報・鍵の値は、記録にもこの紙にも載せない決まり</text>
+  </g>
+
+  <!-- これから -->
+  <g filter="url(#rough)">
+    <path d="M48,926 L1636,922 L1640,1150 L52,1154 Z" fill="#fff9db" stroke="#3b3b3b" stroke-width="2.5" stroke-linejoin="round"/>
+  </g>
+  <text x="80" y="972" font-size="30" fill="#e67700">これから</text>
+  <g font-size="21" fill="#2b2b2b">
+    <text x="84" y="1014">● 毎朝の点検: FAX・問い合わせの件数、失敗の有無、書きかけの残りを集計して報告</text>
+    <text x="84" y="1050">● まれな順番待ちの場面の細かな改善（3 件）は次の版で。同じライターを使うレントゲンのカルテも共通の仕組みで保護される</text>
+    <text x="84" y="1086">● Tukusi のロボット03 は FAX・問い合わせのカルテ書き込みから切り離した。文書生成など他の業務は従来どおり</text>
+    <text x="84" y="1122">● 同じ書類が FAX と SCAN の両方で届く件は、画質のよい SCAN に一本化する方向で別途検討中（未決定）</text>
+  </g>
+</svg>
+</div>
+<p class="note">グラフィックレコーディング風 A4 横 2 枚目。2026-11-05 v1.2（黒ヤギ2回目【進めてよい】: 言い回し）。</p>
+</body>
+</html>
