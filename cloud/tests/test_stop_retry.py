@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""cloud/server.py v3.6.0 と bot_s_interrupt.yaml 1.2 の結合テスト（S を確かめられなければ保存しない・1回やり直す）
+"""cloud/server.py v3.6.0〜v3.8.0 と bot_s_interrupt.yaml 1.2 の結合テスト（S を確かめられなければ保存しない・1回やり直す）
 
 DX担当「問い合わせで S 欄が空はあかん」（11/4 0017）。
 本物の server.write_karte → 本物の TemplateEngine → 本物の BrowserActions（本物の Chrome・headless）で、
@@ -72,7 +72,7 @@ function call(path, body) {
   x.send(JSON.stringify(body || {})); return JSON.parse(x.responseText);
 }
 var ACT = '', ST = '';
-function newKarte() { var r = call('/new'); KID = r.karte_id; ACT = r.act_date; ST = r.start_time;
+function newKarte() { var r = call('/new'); if (r.alert) { alert(r.alert); return; } KID = r.karte_id; ACT = r.act_date; ST = r.start_time;
   document.getElementById('kind').style.display = 'block'; }
 function openLater() {
   var m = call('/mode').mode;
@@ -134,7 +134,10 @@ class FakeHomis:
                 body = json.loads(self.rfile.read(n).decode("utf-8") or "{}")
                 path = self.path.split("?")[0]
                 with outer.lock:
-                    if path == "/new":
+                    if path == "/new" and outer.alerts:
+                        outer.news.append(("alert", False))   # v3.8.0: 新規が開かず知らせだけ出る（何も作らない）
+                        self._json({"alert": outer.alerts.pop(0)})
+                    elif path == "/new":
                         if outer.editing is None:
                             outer.next_id += 1
                             outer.editing = outer.next_id
@@ -169,6 +172,7 @@ class FakeHomis:
         self.editing, self.next_id, self.created = None, 1000, {}
         self.clock = datetime.datetime.now   # 手元の PC は日本時間
         self.modes, self.news, self.saves, self.dx, self.field = [], [], [], [], []
+        self.alerts = []
 
 
 def _local_driver(self):
@@ -220,6 +224,13 @@ class StopRetry(unittest.TestCase):
     def setUp(self):
         self.homis.reset()
         getattr(server, "_LEFT_KIDS", {}).clear()   # v3.7.0: 覚えた番号はテストごとに空から（直す前の版でも流せるように）
+        self._keep_wait = getattr(server, "BLOCKED_RETRY_WAIT_SEC", None)
+        if self._keep_wait is not None:
+            server.BLOCKED_RETRY_WAIT_SEC = 0.5   # v3.8.0: テストでは 90 秒も待たない
+
+    def tearDown(self):
+        if self._keep_wait is not None:
+            server.BLOCKED_RETRY_WAIT_SEC = self._keep_wait
 
     def write(self, oid):
         return server.write_karte({"orderId": oid, "homisId": "2277808", "template": "bot_s_interrupt", "sContent": TEXT})
@@ -336,6 +347,108 @@ class StopRetry(unittest.TestCase):
         self.assertEqual(self.homis.saves, [])
         self.assertEqual(self.homis.field, [])
         self.assertEqual(len(self.homis.dx), 1)
+
+    # --- v3.8.0 入力途中のカルテで止められたら、あけて1回だけやり直す ---
+    IN_PROGRESS = "入力途中のカルテが存在します"
+
+    def test_b1_blocked_once_then_written(self):
+        # 1回目: 新規で「入力途中」→ 何もしない。あけて2回目: 普通に書ける → 成功・現場にも DX にも知らせない
+        self.homis.alerts = [self.IN_PROGRESS]
+        out = self.write("BOT-1-20261105110001")
+        self.assertEqual((out["success"], out["error_type"], out["retried_blocked"]), (True, "", "in_progress_karte"))
+        self.assertEqual(self.homis.news, [("alert", False), (1001, False)])
+        self.assertEqual([(x["karte_id"], x["s"]) for x in self.homis.saves], [(1001, WANT)])
+        self.assertEqual((self.homis.dx, self.homis.field), ([], []))
+
+    def test_b2_blocked_twice_fails_and_tells(self):
+        # 2回とも「入力途中」→ 何も書かない・失敗・現場と DX に1回ずつ（DX に「やり直しても同じ」）
+        self.homis.alerts = [self.IN_PROGRESS, self.IN_PROGRESS]
+        out = self.write("BOT-1-20261105110002")
+        self.assertEqual((out["success"], out["error_type"]), (False, "blocked:in_progress_karte"))
+        self.assertEqual(self.homis.news, [("alert", False), ("alert", False)])
+        self.assertEqual(self.homis.saves, [])
+        self.assertEqual(len(self.homis.field), 1)
+        self.assertIn("入力途中のカルテ", self.homis.field[0])
+        self.assertEqual(len(self.homis.dx), 1)
+        self.assertIn("やり直しましたが", self.homis.dx[0])
+
+    def test_b3_other_alert_is_not_retried(self):
+        # 別の文の知らせ（unexpected_alert）はやり直さない（今までどおり1回で止める）
+        self.homis.alerts = ["ほかの知らせ", self.IN_PROGRESS]
+        out = self.write("BOT-1-20261105110003")
+        self.assertEqual((out["success"], out["error_type"], out["retried_blocked"]), (False, "blocked:unexpected_alert", ""))
+        self.assertEqual(self.homis.news, [("alert", False)])
+
+    def test_b4_no_time_left_no_retry(self):
+        # 時間が足りない（上限で切られると知らせが出ない）ときはやり直さず、今までどおり知らせる
+        keep = server.REQUEST_BUDGET_SEC
+        server.REQUEST_BUDGET_SEC = 10.0
+        self.homis.alerts = [self.IN_PROGRESS]
+        try:
+            out = self.write("BOT-1-20261105110004")
+        finally:
+            server.REQUEST_BUDGET_SEC = keep
+        self.assertEqual((out["success"], out["error_type"], out["retried_blocked"]), (False, "blocked:in_progress_karte", ""))
+        self.assertEqual(self.homis.news, [("alert", False)])
+        self.assertEqual(len(self.homis.field), 1)
+
+    def test_b5_scope_and_wait(self):
+        # やり直すのは FAX と問い合わせだけ（レントゲンは変えない）。本番の待ちは 90 秒・上限の見込みは 300 秒の内側
+        self.assertEqual(server.BLOCKED_RETRY_TEMPLATES, {"fax_so", "bot_s_interrupt"})
+        self.assertEqual(self._keep_wait, 90.0)
+        self.assertLess(server.REQUEST_BUDGET_SEC, 300.0)
+
+    def test_b6_stop_retry_skipped_when_no_time(self):
+        # 入力途中のやり直しのあと S を確かめられなかったが、時間が足りない → S のやり直しはせず失敗で知らせる（保存しない）
+        keep = server.BLOCKED_RETRY_RUN_SEC
+        server.BLOCKED_RETRY_RUN_SEC = 0.0   # 入力途中のやり直しは通す
+        self.homis.alerts = [self.IN_PROGRESS]
+        self.homis.modes = ["never", "500"]
+        keep_budget = server.REQUEST_BUDGET_SEC
+        try:
+            server.REQUEST_BUDGET_SEC = 1.0e9
+            orig_run = server._run_once
+            calls = []
+
+            def run_and_shrink(data):
+                calls.append(1)
+                r = orig_run(data)
+                if len(calls) == 2:
+                    server.BLOCKED_RETRY_RUN_SEC = 1.0e9   # 2回目のあとは時間が無いことにする
+                return r
+            server._run_once = run_and_shrink
+            out = self.write("BOT-1-20261105110006")
+        finally:
+            server._run_once = orig_run
+            server.BLOCKED_RETRY_RUN_SEC = keep
+            server.REQUEST_BUDGET_SEC = keep_budget
+        self.assertEqual(len(calls), 2)
+        self.assertEqual((out["success"], out["error_type"], out["retried"]), (False, "stopped:unverified_input", ""))
+        self.assertEqual(self.homis.saves, [])
+        self.assertEqual(len(self.homis.field), 1)
+        # 黒ヤギ v3.8.0 指摘1: やり直していないのに「やり直しても同じ」と書かない・入力途中で待った経緯は書く
+        self.assertEqual(len(self.homis.dx), 1)
+        self.assertNotIn("やり直しても同じ", self.homis.dx[0])
+        self.assertIn("やり直していません", self.homis.dx[0])
+        self.assertIn("入力途中のカルテ", self.homis.dx[0])
+
+    def test_b7_second_try_blocked_by_other_reason_keeps_history(self):
+        # 黒ヤギ v3.8.0 指摘2: 1回目は入力途中・2回目は別の知らせで止まる → DX に待ってやり直した経緯が残る
+        self.homis.alerts = [self.IN_PROGRESS, "ほかの知らせ"]
+        out = self.write("BOT-1-20261105110007")
+        self.assertEqual((out["success"], out["error_type"], out["retried_blocked"]), (False, "blocked:unexpected_alert", "in_progress_karte"))
+        self.assertEqual(self.homis.saves, [])
+        self.assertEqual(len(self.homis.dx), 1)
+        self.assertIn("あけてやり直した2回目", self.homis.dx[0])
+        self.assertEqual(len(self.homis.field), 1)
+
+    def test_b8_stop_twice_after_wait_says_same(self):
+        # S のやり直しまで通したときは今までどおり「やり直しても同じ」（時間の見張りが誤って効かない）
+        self.homis.modes = ["never", "never"]
+        out = self.write("BOT-1-20261105110008")
+        self.assertEqual(out["retried"], "S欄に入力")
+        self.assertIn("やり直しても同じ", self.homis.dx[0])
+        self.assertNotIn("入力途中のカルテ", self.homis.dx[0])
 
 
 if __name__ == "__main__":

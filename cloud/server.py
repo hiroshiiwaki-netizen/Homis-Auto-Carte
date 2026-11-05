@@ -2,9 +2,14 @@
 """Cloud Run 受け口（フェーズ2a＋失敗ガード）
 
 ==============================================================================
-バージョン: 3.7.0
-最終更新: 2026/11/04
+バージョン: 3.8.0
+最終更新: 2026/11/05
 改定履歴（新しい順・全体は docs/SPEC_v3_cloud.md 0章「モジュール別の版」）:
+  v3.8.0 11/05 新規で「入力途中のカルテが存在します」と止められたら（blocked:in_progress_karte）、90秒あけて1回だけ最初からやり直す。
+               FAX（fax_so）と問い合わせ（bot_s_interrupt）だけ。レントゲンと、ほかの文の知らせ（unexpected_alert）は今までどおり。
+               待つ前の経過＋90秒＋120秒（やり直し1回分の見込み）が 280 秒を超えるならやり直さない（Cloud Run の上限 300 秒）。
+               2回とも止められたら今までどおり失敗・現場と DX に知らせる（DX の文に「やり直しても同じ」）。
+               11/5 10:19 同じ患者さんへの FAX 3枚目（-103）で起きた・DX担当「案2」
   v3.7.0 11/04 前の書きかけ（ライター自身が残した編集中）が新規で戻ったら、書く前に止める（全型紙共通・DX担当「案①」）。
                新規のあと最初の js_input の直前に、編集画面の #karte_id・#act_date・#start_time を読み、
                日付＋開始時刻が新規を押した時刻より2分以上前、または書けずに残した番号として覚えたものなら blocked:reused_editing。
@@ -105,6 +110,14 @@ BLOCK_ALERT_WAIT_SEC = 2.0
 # 新規の画面が開くと編集タブ（最初は空の div・11/2 テスト舞子のページで確認）に「完了」ボタンが入る。
 # 見つからなくても 2 秒待つだけ。誤って早く進んでも、FAX はカルテ番号なしで失敗になる（v3.4.0 の守り）
 NEW_FORM_SELECTOR = "#pdetail_karteedit #karteCompletion"
+# v3.8.0: 「入力途中のカルテが存在します」で止められたら、少しあけて1回だけやり直す（11/5 同じ患者さんへの FAX 3枚目で起きた・DX担当「案2」）。
+# レントゲンは変えない（撮影完了の知らせの流れがあるため）。知らせの文が違うとき（unexpected_alert）もやり直さない
+BLOCKED_RETRY_TEMPLATES = {"fax_so", "bot_s_interrupt"}
+BLOCKED_RETRY_WAIT_SEC = 90.0
+# Cloud Run の待ちの上限は 300 秒（11/5 確認）。やり直しの1回分（ログイン〜保存〜読み直し）を 120 秒と見て、
+# 待つ前の経過＋待ち＋120 秒が 280 秒を超えるならやり直さない（今までどおり知らせる）
+BLOCKED_RETRY_RUN_SEC = 120.0
+REQUEST_BUDGET_SEC = 280.0
 
 # v3.7.0: 前の書きかけの守り（仕様 SPEC_ライター_編集中の守り_v0.md v0.5）
 JST = timezone(timedelta(hours=9))
@@ -524,8 +537,26 @@ def write_karte(data: dict) -> dict:
         result = _run_once(data)
         opened = _opened()
         err = infer_error_type(result)
+    blocked_retry = ""
+    if _blocked() == "in_progress_karte" and _template_name(data) in BLOCKED_RETRY_TEMPLATES:
+        # v3.8.0: 新規は開いていない（何も書いていない）。少しあけて1回だけ最初からやり直す
+        spent = time.time() - t0
+        if spent + BLOCKED_RETRY_WAIT_SEC + BLOCKED_RETRY_RUN_SEC <= REQUEST_BUDGET_SEC:
+            blocked_retry = "in_progress_karte"
+            logger.warning("入力途中のカルテで止められたため %s 秒あけて1回だけやり直す orderId=%s",
+                           int(BLOCKED_RETRY_WAIT_SEC), order_id)
+            time.sleep(BLOCKED_RETRY_WAIT_SEC)
+            _reset_opened()
+            result = _run_once(data)
+            opened = _opened()
+            err = infer_error_type(result)
+        else:
+            logger.warning("入力途中のカルテで止められたが、時間が足りないのでやり直さない orderId=%s 経過=%.0f秒", order_id, spent)
     left_editing = ""
-    if _stopped():
+    if _stopped() and time.time() - t0 + BLOCKED_RETRY_RUN_SEC > REQUEST_BUDGET_SEC:
+        # v3.8.0: 入力途中のやり直しのあとなどで時間が足りない。上限で切られると知らせが出ないので、やり直さず失敗で知らせる
+        logger.warning("保存せずに止めたが、時間が足りないのでやり直さない orderId=%s 経過=%.0f秒", order_id, time.time() - t0)
+    elif _stopped():
         # v3.6.0: 保存せずに止めた（書きかけは編集中で残る）。同じアカウントの新規で同じカルテが戻るので、1回だけやり直す
         left_editing = _stopped()
         logger.warning("保存せずに止めたため1回だけやり直す orderId=%s 手順=%s", order_id, left_editing)
@@ -592,6 +623,11 @@ def write_karte(data: dict) -> dict:
         if blocked == "reused_editing":
             how += (f"\n戻ってきたのはカルテ {getattr(_TLS, 'current_kid', '') or '（番号不明）'}"
                     "（前にライターが書けずに残した書きかけ）。白ヤギがその日のうちに取り消します。")
+        if blocked_retry and blocked == "in_progress_karte":
+            how += f"\n※{int(BLOCKED_RETRY_WAIT_SEC)}秒あけて1回やり直しましたが、同じ知らせで止められました。"
+        elif blocked_retry:
+            # 黒ヤギ v3.8.0 指摘2: やり直しの2回目が別の理由で止まったときも、待ってやり直した経緯を残す
+            how += f"\n※1回目は「入力途中のカルテ」で止められ、{int(BLOCKED_RETRY_WAIT_SEC)}秒あけてやり直した2回目で、上の理由で止まりました。"
         if left_editing:
             how += f"\n※1回目に「{left_editing}」を確かめられず保存せずに止めたため、ライターの書きかけ（編集中）が1枚残っています。"
         navi_callback.notify_dx(
@@ -601,8 +637,11 @@ def write_karte(data: dict) -> dict:
         )
     elif stopped:
         navi_callback.notify_dx(
-            f"HOMIS ライター（GCP）: 「{stopped}」を確かめられず、保存せずに止めました（やり直しても同じ）。"
-            "ライターの書きかけ（編集中）が1枚残っています。次にライターがこの患者さんの新規を開くと、そのカルテが戻って使われます。"
+            f"HOMIS ライター（GCP）: 「{stopped}」を確かめられず、保存せずに止めました"
+            # 黒ヤギ v3.8.0 指摘1: 時間が足りずにやり直さなかったときは「やり直しても同じ」と書かない
+            + ("（やり直しても同じ）。" if left_editing else "（時間が足りないため、やり直していません）。")
+            + (f"1回目は「入力途中のカルテ」で止められ、{int(BLOCKED_RETRY_WAIT_SEC)}秒あけてやり直していました。" if blocked_retry else "")
+            + "ライターの書きかけ（編集中）が1枚残っています。次にライターがこの患者さんの新規を開くと、そのカルテが戻って使われます。"
             "残したくなければ白ヤギが取り消します。"
             + ("現場（問い合わせ用の Chat）には「問い合わせの画面の内容から書いてください」と知らせました。" if _is_live_bot(data) else "")
             + f"\n{_patient_url(homis_id, '')}\norderId={order_id}",
@@ -651,6 +690,7 @@ def write_karte(data: dict) -> dict:
         "failed_steps": failed_steps,
         "verify": checked["verdict"] if checked else "",
         "retried": left_editing,   # v3.6.0: 1回目に止めた手順の名前（やり直さなかったら空）
+        "retried_blocked": blocked_retry,   # v3.8.0: 入力途中のカルテで止められて、あけてやり直したら "in_progress_karte"
     }
 
 
