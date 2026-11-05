@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""受け口 v0.4.0 の問い合わせの口（POST /bot/receive）のテスト
+"""受け口 v0.4.0〜v0.5.0 の問い合わせの口（POST /bot/receive）のテスト
 
 test_live.py と同じく、偽の metadata・偽の Cloud Tasks・偽の Chat を立て、本物の server.py を別プロセスで動かして
 Tukusi WF1133 と同じ形で送る。すべてダミーの値。
@@ -202,6 +202,45 @@ class BotFlow(LiveFlow):
         self.send_live(port, ticket="261102090000-1")
         self.assertEqual(self.cloud.tasks[0]["task"]["name"], LIVE_Q + "/tasks/FAX-261102090000-1")
         self.assertEqual(self.payload()["template"], "fax_so")
+
+    # --- v0.5.0: 問い合わせの列を分ける準備 ---
+    BOT_Q = "projects/p/locations/asia-northeast1/queues/homis-bot-writer"
+
+    def test_c1_dispatch_deadline_on_every_task(self):
+        # FAX・問い合わせとも、仕事の待ちの上限 900s が task の直下に文字列で付く（httpRequest の中ではない）
+        port, log = self.start_bot()
+        self.send_live(port, ticket="261105090000-1")
+        self.send_bot(port)
+        self.assertEqual(len(self.cloud.tasks), 2)
+        for t in self.cloud.tasks:
+            self.assertEqual(t["task"]["dispatchDeadline"], "900s")
+            self.assertNotIn("dispatchDeadline", t["task"]["httpRequest"])
+        self.assertEqual(server.TASK_DISPATCH_DEADLINE, "900s")
+
+    def test_c2_bot_queue_separates_inquiry_from_fax(self):
+        # BOT_QUEUE があれば問い合わせはそちら、FAX は LIVE_QUEUE のまま（列の名前の前後の空白と / も取る）
+        port, log = self.start_bot(BOT_QUEUE=" /" + self.BOT_Q + "/ ")
+        self.send_bot(port)
+        self.send_live(port, ticket="261105090000-2")
+        bot, fax = self.cloud.tasks
+        self.assertEqual(bot["path"], "/v2/" + self.BOT_Q + "/tasks")
+        self.assertEqual(bot["task"]["name"], self.BOT_Q + "/tasks/BOT-123-20261102160000")
+        self.assertEqual(fax["path"], "/v2/" + LIVE_Q + "/tasks")
+        self.assertEqual(fax["task"]["name"], LIVE_Q + "/tasks/FAX-261105090000-2")
+        self.assertEqual(self.last_bot(log)["result"], "queued")
+
+    def test_c3_empty_bot_queue_falls_back_to_live(self):
+        # BOT_QUEUE が空（配置の前）なら今までどおり FAX と同じ列
+        port, log = self.start_bot(BOT_QUEUE="  ")
+        self.send_bot(port)
+        self.assertEqual(self.cloud.tasks[0]["path"], "/v2/" + LIVE_Q + "/tasks")
+        self.assertEqual(self.cloud.tasks[0]["task"]["name"], LIVE_Q + "/tasks/BOT-123-20261102160000")
+
+    def test_c4_test_mode_also_uses_bot_queue(self):
+        # 試し書き（test）も問い合わせの列に入る（本番と同じ道を通す）
+        port, log = self.start_bot(BOT_MODE="test", BOT_QUEUE=self.BOT_Q)
+        self.send_bot(port)
+        self.assertEqual(self.cloud.tasks[0]["task"]["name"], self.BOT_Q + "/tasks/BOT-TEST-123-20261102160000")
 
 
 # LiveFlow（と MirrorFlow）のテストを二重に流さない

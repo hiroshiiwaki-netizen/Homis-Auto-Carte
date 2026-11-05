@@ -2,9 +2,14 @@
 """FAX カルテの受け口（横付けで受け取るだけ・段1）
 
 ==============================================================================
-バージョン: 0.4.0
-最終更新: 2026/11/02
+バージョン: 0.5.0
+最終更新: 2026/11/05
 改定履歴（新しい順・全体は docs/SPEC_v3_cloud.md 0章「モジュール別の版」）:
+  v0.5.0 11/05 問い合わせの列を FAX と分ける準備（仕様 docs/FAXカルテ_検討/SPEC_問い合わせの列を分ける_v0.md v0.3・DX担当「案2」）。
+               ①仕事（FAX・問い合わせ・試し書きとも）に dispatchDeadline "900s" を付ける（task の直下・文字列。黒ヤギ仕様2回目 指摘2）。
+                 ライターが患者さんごとの札を待てるようになると最長 600 秒かかるため、Cloud Tasks の既定 600 秒だと先に切られる。
+               ②問い合わせは BOT_QUEUE（homis-bot-writer）に入れる。BOT_QUEUE が空なら今までどおり LIVE_QUEUE（配置の前後で止まらない）。
+               FAX は LIVE_QUEUE のまま。受け取り・照合・知らせは変えない
   v0.4.0 11/02 問い合わせ（OhisamaBot → Tukusi WF1133）の口 POST /bot/receive を足す（FAX の口は変えない）。
                合言葉は BOT_RECEIVER_KEY（FAX と別）。BOT_MODE＝off（記録だけ・既定）／test（テスト舞子・印つき）／live。
                注文番号 BOT-<問い合わせ番号>-<送った時刻14桁>（直しの再送は別のカルテ・GAS の再送は二重よけ）。
@@ -67,7 +72,7 @@ import unicodedata
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "0.4.0"
+VERSION = "0.5.0"
 MAX_BODY = 256 * 1024          # 受け取る本文の上限（バイト）
 READ_TIMEOUT = 10.0            # 1回の読み込みを待つ上限（秒）。少しずつ送る相手で箱がふさがらないように
 LABEL_MAX = 40                 # source・doc_type・route を記録する最大の長さ
@@ -109,9 +114,15 @@ def build_mirror_task(ticket: str, s: str, o: str) -> dict:
                        "テスト", MIRROR_MARK + s, o)
 
 
+# v0.5.0: 仕事の待ちの上限。ライターは札待ち 320 秒＋書き込み 280 秒＝最長 600 秒（Cloud Run の上限は 900 秒に）。
+# Cloud Tasks の既定 600 秒と同じだと、起動や通信の遅れでライターより先に切られる（黒ヤギ仕様1回目 指摘2）。上限は 30 分
+TASK_DISPATCH_DEADLINE = "900s"
+
+
 def _build_task(queue: str, order_id: str, homis_id: str, patient_name: str, s: str, o, template: str = "fax_so") -> dict:
     """ライターあての仕事（OIDC＋X-Writer-Key・既定の型紙 fax_so）。試し書きと本番で同じ形。
-    v0.4.0: 問い合わせは template=bot_s_interrupt・O なし（o=None なら oContent を入れない）"""
+    v0.4.0: 問い合わせは template=bot_s_interrupt・O なし（o=None なら oContent を入れない）
+    v0.5.0: dispatchDeadline は task の直下に文字列で（httpRequest の中に入れると API が 400 で弾く・黒ヤギ仕様2回目 指摘2）"""
     writer = os.environ.get("WRITER_URL", "").rstrip("/")
     payload = {
         "orderId": order_id,
@@ -124,6 +135,7 @@ def _build_task(queue: str, order_id: str, homis_id: str, patient_name: str, s: 
         payload["oContent"] = o
     return {"task": {
         "name": queue + "/tasks/" + order_id,
+        "dispatchDeadline": TASK_DISPATCH_DEADLINE,
         "httpRequest": {
             "url": writer + "/write",
             "httpMethod": "POST",
@@ -276,6 +288,12 @@ BOT_REASON_TEXT = {
 }
 
 
+def bot_queue() -> str:
+    """v0.5.0: 問い合わせの列（BOT_QUEUE・homis-bot-writer）。空なら FAX と同じ LIVE_QUEUE（配置の前後で止まらない）。
+    前後の空白と「/」を取るのは live_queue と同じ"""
+    return os.environ.get("BOT_QUEUE", "").strip().strip("/") or live_queue()
+
+
 def bot_mode() -> str:
     """off／test／live。知らない値・未設定は off（書かない側に倒す）"""
     mode = os.environ.get("BOT_MODE", "").strip().lower()
@@ -339,8 +357,9 @@ def enqueue_bot(body: dict) -> tuple[str, str, str]:
         if test_id not in MIRROR_TEST_PATIENTS:
             return "skip:not_test_patient", order_id, check
         order_id, homis_id, s = order_id.replace("BOT-", "BOT-TEST-", 1), test_id, BOT_TEST_MARK + s
-    task = _build_task(live_queue(), order_id, homis_id, "", s, None, template="bot_s_interrupt")
-    word = _post_task(live_queue(), task)
+    queue = bot_queue()   # v0.5.0: 問い合わせの列（BOT_QUEUE が空なら LIVE_QUEUE）
+    task = _build_task(queue, order_id, homis_id, "", s, None, template="bot_s_interrupt")
+    word = _post_task(queue, task)
     if word.startswith("error"):
         notify_bot_failure(order_id, word)
     return word, order_id, check
