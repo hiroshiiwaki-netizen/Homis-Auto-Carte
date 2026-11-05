@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FAX・問い合わせのカルテ、書き道を Tukusi から GCP へ（報告）</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=BIZ+UDPGothic:wght@400;700&amp;family=Yusei+Magic&amp;family=Klee+One:wght@400;600&amp;display=swap" rel="stylesheet">
+<style>
+  html,body{margin:0;background:#e9ecef;font-family:'BIZ UDPGothic','BIZ UDPゴシック','Meiryo',sans-serif;color:#343a40}
+  .wrap{max-width:1684px;margin:0 auto;padding:16px}
+  .sum{background:#fff;border-left:6px solid #1c7ed6;border-radius:8px;padding:14px 20px;margin-bottom:16px;line-height:1.7;font-size:17px}
+  .sum ul{margin:6px 0 0 20px;padding:0}
+  svg{width:100%;height:auto;display:block;box-shadow:0 2px 14px rgba(0,0,0,.18);margin-bottom:18px}
+  #page1{background:#fff}
+  #page2{background:#fffdf6}
+  .hist{background:#fff;border-radius:8px;padding:12px 20px;font-size:14px;color:#495057;line-height:1.7}
+  .hist h2{font-size:16px;margin:0 0 4px}
+  @page{size:A4 landscape;margin:0}
+  @media print{html,body{background:#fff}.wrap{padding:0;max-width:none}.sum,.hist{display:none}svg{box-shadow:none;margin:0;page-break-after:always}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<div class="sum">
+  <strong>FAX・問い合わせのカルテ、書き道を Tukusi から GCP へ（報告・法人内）</strong>　2026-11-05　DX推進部
+  <ul>
+    <li>FAX（11/2〜）と問い合わせ（11/5〜）のカルテ書き込みを、Tukusi のブラウザ操作から GCP のカルテライターへ移した。</li>
+    <li>書いたあとに読み直して確かめ、書けなければ 1 分以内に現場と DX の Chat へ通知する。対策後に気づかない失敗は 0 件。</li>
+    <li>11/2〜11/5 の FAX 本番 152 件のうち成功 147 件（97%）。問い合わせ本番は 9 件すべて成功。1 件約 50 秒。</li>
+  </ul>
+</div>
+<svg id="page1" viewBox="0 0 1684 1190" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="カルテの書き道を Tukusi から GCP へ変えた報告 1枚目 流れと数字"
+     font-family="'BIZ UDPGothic','BIZ UDPゴシック','Meiryo',sans-serif">
+  <defs>
+    <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#495057"/>
+    </marker>
+    <marker id="arb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#1c7ed6"/>
+    </marker>
+  </defs>
+
+  <!-- 見出し -->
+  <rect x="0" y="0" width="1684" height="92" fill="#1c3f5e"/>
+  <text x="48" y="58" font-size="40" font-weight="700" fill="#fff">FAX・問い合わせのカルテ、書き道を Tukusi から GCP へ</text>
+  <text x="1636" y="40" font-size="20" fill="#cfe2f3" text-anchor="end">報告（法人内）　2026-11-05　DX推進部</text>
+  <text x="1636" y="72" font-size="20" fill="#cfe2f3" text-anchor="end">1 / 2　流れと数字</text>
+
+  <!-- 前 -->
+  <text x="48" y="148" font-size="26" font-weight="700" fill="#868e96">これまで（〜11/1）</text>
+  <rect x="48" y="166" width="1588" height="150" rx="14" fill="#f8f9fa" stroke="#ced4da" stroke-width="2"/>
+  <g font-size="22" fill="#343a40">
+    <rect x="80" y="180" width="250" height="54" rx="10" fill="#fff" stroke="#adb5bd" stroke-width="2"/>
+    <text x="205" y="215" text-anchor="middle" font-size="20">FAX・スキャン <tspan font-size="15" fill="#868e96">OhiScanGo</tspan></text>
+    <rect x="80" y="248" width="250" height="54" rx="10" fill="#fff" stroke="#adb5bd" stroke-width="2"/>
+    <text x="205" y="283" text-anchor="middle" font-size="20">問い合わせ <tspan font-size="15" fill="#868e96">OhisamaBot</tspan></text>
+    <line x1="330" y1="207" x2="600" y2="230" stroke="#495057" stroke-width="3" marker-end="url(#ar)"/>
+    <line x1="330" y1="275" x2="600" y2="250" stroke="#495057" stroke-width="3" marker-end="url(#ar)"/>
+    <rect x="610" y="186" width="420" height="106" rx="10" fill="#fff3bf" stroke="#f08c00" stroke-width="2"/>
+    <text x="820" y="222" text-anchor="middle" font-weight="700">Tukusi のロボット（p281 のパソコン）</text>
+    <text x="820" y="252" text-anchor="middle" font-size="19">ブラウザを人のように操作して HOMIS に貼る</text>
+    <text x="820" y="278" text-anchor="middle" font-size="17" fill="#c92a2a">操作が終われば「成功」。保存後の中身は確かめない</text>
+    <line x1="1030" y1="239" x2="1120" y2="239" stroke="#495057" stroke-width="3" marker-end="url(#ar)"/>
+    <rect x="1130" y="196" width="190" height="86" rx="10" fill="#fff" stroke="#adb5bd" stroke-width="2"/>
+    <text x="1225" y="245" text-anchor="middle" font-weight="700">HOMIS</text>
+    <text x="1345" y="226" font-size="19" fill="#c92a2a">● 空のカルテが残る（7 件）</text>
+    <text x="1345" y="256" font-size="19" fill="#c92a2a">● 同じ患者さんを上書き（3 回）</text>
+    <text x="1345" y="286" font-size="19" fill="#c92a2a">● p281 の操作が詰まると止まる</text>
+  </g>
+
+  <!-- 後 -->
+  <text x="48" y="372" font-size="26" font-weight="700" fill="#1c7ed6">これから（FAX 11/2〜・問い合わせ 11/5〜）</text>
+  <rect x="48" y="390" width="1588" height="330" rx="14" fill="#e7f5ff" stroke="#74c0fc" stroke-width="2"/>
+  <g font-size="22" fill="#343a40">
+    <rect x="80" y="430" width="190" height="86" rx="10" fill="#fff" stroke="#adb5bd" stroke-width="2"/>
+    <text x="175" y="466" text-anchor="middle">FAX・スキャン</text>
+    <text x="175" y="496" text-anchor="middle" font-size="18" fill="#868e96">OhiScanGo</text>
+    <rect x="80" y="560" width="190" height="86" rx="10" fill="#fff" stroke="#adb5bd" stroke-width="2"/>
+    <text x="175" y="596" text-anchor="middle">問い合わせ</text>
+    <text x="175" y="626" text-anchor="middle" font-size="18" fill="#868e96">OhisamaBot</text>
+    <line x1="270" y1="473" x2="350" y2="473" stroke="#1c7ed6" stroke-width="3" marker-end="url(#arb)"/>
+    <line x1="270" y1="603" x2="350" y2="603" stroke="#1c7ed6" stroke-width="3" marker-end="url(#arb)"/>
+    <rect x="360" y="430" width="170" height="216" rx="10" fill="#fff" stroke="#adb5bd" stroke-width="2"/>
+    <text x="445" y="520" text-anchor="middle">Tukusi API</text>
+    <text x="445" y="550" text-anchor="middle" font-size="18" fill="#868e96">読んで渡すだけ</text>
+    <line x1="530" y1="538" x2="610" y2="538" stroke="#1c7ed6" stroke-width="3" marker-end="url(#arb)"/>
+    <rect x="620" y="430" width="200" height="216" rx="10" fill="#fff" stroke="#1c7ed6" stroke-width="3"/>
+    <text x="720" y="500" text-anchor="middle" font-weight="700">受け口</text>
+    <text x="720" y="530" text-anchor="middle" font-size="18" fill="#868e96">GCP Cloud Run</text>
+    <text x="720" y="562" text-anchor="middle" font-size="18">患者さんの照合</text>
+    <text x="720" y="590" text-anchor="middle" font-size="18">合言葉の確認</text>
+    <line x1="820" y1="500" x2="900" y2="500" stroke="#1c7ed6" stroke-width="3" marker-end="url(#arb)"/>
+    <line x1="820" y1="580" x2="900" y2="580" stroke="#1c7ed6" stroke-width="3" marker-end="url(#arb)"/>
+    <rect x="910" y="470" width="150" height="56" rx="10" fill="#fff" stroke="#adb5bd" stroke-width="2"/>
+    <text x="985" y="505" text-anchor="middle" font-size="19">FAX の列</text>
+    <rect x="910" y="552" width="150" height="56" rx="10" fill="#fff" stroke="#adb5bd" stroke-width="2"/>
+    <text x="985" y="587" text-anchor="middle" font-size="19">問い合わせの列</text>
+    <text x="985" y="640" text-anchor="middle" font-size="17" fill="#868e96">順番に 1 件ずつ</text>
+    <line x1="1060" y1="498" x2="1140" y2="520" stroke="#1c7ed6" stroke-width="3" marker-end="url(#arb)"/>
+    <line x1="1060" y1="580" x2="1140" y2="556" stroke="#1c7ed6" stroke-width="3" marker-end="url(#arb)"/>
+    <rect x="1150" y="430" width="230" height="216" rx="10" fill="#fff" stroke="#1c7ed6" stroke-width="3"/>
+    <text x="1265" y="470" text-anchor="middle" font-weight="700">カルテライター</text>
+    <text x="1265" y="498" text-anchor="middle" font-size="16" fill="#868e96">GCP Cloud Run・Chrome</text>
+    <text x="1265" y="534" text-anchor="middle" font-size="18">① 患者さんごとの札</text>
+    <text x="1265" y="562" text-anchor="middle" font-size="18">② 新規 → 書く → 保存</text>
+    <text x="1265" y="590" text-anchor="middle" font-size="18">③ 読み直して確かめる</text>
+    <text x="1265" y="618" text-anchor="middle" font-size="18">④ 結果を記録</text>
+    <line x1="1380" y1="538" x2="1450" y2="538" stroke="#1c7ed6" stroke-width="3" marker-end="url(#arb)"/>
+    <rect x="1460" y="470" width="150" height="86" rx="10" fill="#fff" stroke="#adb5bd" stroke-width="2"/>
+    <text x="1535" y="520" text-anchor="middle" font-weight="700">HOMIS</text>
+    <path d="M1265,646 L1265,690" stroke="#e03131" stroke-width="3" stroke-dasharray="8 6" marker-end="url(#ar)"/>
+    <rect x="1010" y="664" width="510" height="44" rx="8" fill="#fff5f5" stroke="#e03131" stroke-width="2"/>
+    <text x="1265" y="693" text-anchor="middle" font-size="19" fill="#c92a2a">書けなければ 1 分以内に現場と DX の Chat へ通知</text>
+  </g>
+
+  <!-- 数字 -->
+  <text x="48" y="776" font-size="26" font-weight="700" fill="#343a40">結果（11/2〜11/5 15時・ログから）</text>
+  <g>
+    <rect x="48" y="794" width="380" height="170" rx="14" fill="#fff" stroke="#ced4da" stroke-width="2"/>
+    <text x="238" y="830" font-size="22" text-anchor="middle" fill="#495057">FAX のカルテ（本番）</text>
+    <text x="238" y="900" font-size="54" font-weight="700" text-anchor="middle" fill="#1c7ed6">147 / 152</text>
+    <text x="238" y="940" font-size="16" text-anchor="middle" fill="#495057">成功 97%・対策後の失敗 4 件はすべてその場で通知</text>
+
+    <rect x="452" y="794" width="380" height="170" rx="14" fill="#fff" stroke="#ced4da" stroke-width="2"/>
+    <text x="642" y="830" font-size="22" text-anchor="middle" fill="#495057">問い合わせのカルテ</text>
+    <text x="642" y="900" font-size="54" font-weight="700" text-anchor="middle" fill="#1c7ed6">9 / 9</text>
+    <text x="642" y="940" font-size="16" text-anchor="middle" fill="#495057">11/5 本番開始。並走試験 100 件も修正後は失敗 0</text>
+
+    <rect x="856" y="794" width="380" height="170" rx="14" fill="#fff" stroke="#ced4da" stroke-width="2"/>
+    <text x="1046" y="830" font-size="22" text-anchor="middle" fill="#495057">1 件を書く時間</text>
+    <text x="1046" y="900" font-size="54" font-weight="700" text-anchor="middle" fill="#1c7ed6">約 50 秒</text>
+    <text x="1046" y="940" font-size="16" text-anchor="middle" fill="#495057">受け取り → 新規 → 保存 → 読み直しまで</text>
+
+    <rect x="1260" y="794" width="376" height="170" rx="14" fill="#fff" stroke="#ced4da" stroke-width="2"/>
+    <text x="1448" y="830" font-size="22" text-anchor="middle" fill="#495057">気づかない失敗（対策後）</text>
+    <text x="1448" y="900" font-size="54" font-weight="700" text-anchor="middle" fill="#2f9e44">0 件</text>
+    <text x="1448" y="940" font-size="16" text-anchor="middle" fill="#495057">保存後に読み直し、不一致・未完了は必ず通知</text>
+  </g>
+
+  <!-- 比べ方の注意 -->
+  <rect x="48" y="990" width="1588" height="150" rx="14" fill="#fff9db" stroke="#f08c00" stroke-width="2"/>
+  <text x="72" y="1026" font-size="22" font-weight="700" fill="#e67700">Tukusi 時代と比べるときの注意</text>
+  <text x="72" y="1062" font-size="19" fill="#495057">・Tukusi は操作が終われば「成功」になり、保存後のカルテの中身までは確かめていなかった（10/23〜28 の照合で空のカルテ 7 件、過去に上書き 3 回を確認）。</text>
+  <text x="72" y="1094" font-size="19" fill="#495057">・GCP 移行後に書けなかったのは計 5 件。うち 3 件は職員が同じ患者さんのカルテを開いていたため（今は 90 秒待って 1 回やり直す）。</text>
+  <text x="72" y="1126" font-size="19" fill="#495057">　初日の 1 件は対策前で成功扱い・通知なし、11/4・11/5 の各 1 件は通知済み。残り 2 件（11/4）は読み直しで本文の不一致に気づき、その場で通知した。</text>
+
+  <text x="1636" y="1172" font-size="16" fill="#868e96" text-anchor="end">数字の出どころ: ライターの記録（Cloud Logging）・WORK_LOG 10/29・11/2〜11/5　／　患者さんの情報は載せていません</text>
+</svg>
+<svg id="page2" viewBox="0 0 1684 1190" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="カルテの書き道を Tukusi から GCP へ変えた報告 2枚目 苦労したところとよいところ"
+     font-family="'Yusei Magic','Klee One','BIZ UDPGothic','Meiryo',sans-serif">
+  <defs>
+    <filter id="rough" x="-2%" y="-2%" width="104%" height="104%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.02" numOctaves="2" seed="7" result="n"/>
+      <feDisplacementMap in="SourceGraphic" in2="n" scale="2.2" xChannelSelector="R" yChannelSelector="G"/>
+    </filter>
+    <marker id="hand" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="10" markerHeight="10" orient="auto-start-reverse">
+      <path d="M1,1 L9,5 L1,9" fill="none" stroke="#3b3b3b" stroke-width="1.6" stroke-linecap="round"/>
+    </marker>
+  </defs>
+
+  <!-- 題 -->
+  <g filter="url(#rough)">
+    <path d="M40,28 L1060,24 L1064,98 L44,104 Z" fill="#ffe8a3" stroke="#3b3b3b" stroke-width="2.5" stroke-linejoin="round"/>
+  </g>
+  <text x="70" y="78" font-size="38" fill="#2b2b2b">Tukusi から GCP へ ─ 苦労したところ と よいところ</text>
+  <text x="1636" y="52" font-size="20" fill="#6b6b6b" text-anchor="end">2 / 2　2026-11-05　DX推進部（法人内）</text>
+  <text x="1636" y="80" font-size="17" fill="#6b6b6b" text-anchor="end">実装: Claude Code（白ヤギ）／査読: Antigravity（黒ヤギ）／判断: DX推進部</text>
+
+  <!-- 道のり -->
+  <g stroke="#3b3b3b" stroke-width="3" fill="none" stroke-linecap="round">
+    <path d="M70,170 C300,150 500,190 760,168 S1300,150 1600,172" filter="url(#rough)" marker-end="url(#hand)"/>
+  </g>
+  <g font-size="19" fill="#2b2b2b" text-anchor="middle">
+    <g><circle cx="130" cy="166" r="12" fill="#ffd43b" stroke="#3b3b3b" stroke-width="2"/><text x="130" y="212">10/26</text><text x="130" y="236" font-size="17" fill="#555">受け口を横付け</text><text x="130" y="258" font-size="17" fill="#555">（受け取るだけ）</text></g>
+    <g><circle cx="400" cy="172" r="12" fill="#ffd43b" stroke="#3b3b3b" stroke-width="2"/><text x="400" y="212">10/28〜29</text><text x="400" y="236" font-size="17" fill="#555">テスト舞子に試し書き</text><text x="400" y="258" font-size="17" fill="#555">書いたあと読み直す</text></g>
+    <g><circle cx="700" cy="168" r="12" fill="#ff8787" stroke="#3b3b3b" stroke-width="2"/><text x="700" y="212">11/2（月）</text><text x="700" y="236" font-size="17" fill="#555">FAX を本番に</text><text x="700" y="258" font-size="17" fill="#555">初日 夕方まで 22 件中 20 件</text></g>
+    <g><circle cx="1000" cy="160" r="12" fill="#ffd43b" stroke="#3b3b3b" stroke-width="2"/><text x="1000" y="212">11/4</text><text x="1000" y="236" font-size="17" fill="#555">問い合わせを並走で試験</text><text x="1000" y="258" font-size="17" fill="#555">課題 3 つを当日中に対策</text></g>
+    <g><circle cx="1300" cy="158" r="12" fill="#ff8787" stroke="#3b3b3b" stroke-width="2"/><text x="1300" y="212">11/5 13:24</text><text x="1300" y="236" font-size="17" fill="#555">問い合わせも本番に</text><text x="1300" y="258" font-size="17" fill="#555">15:17 列を分けた</text></g>
+    <g><circle cx="1560" cy="170" r="12" fill="#8ce99a" stroke="#3b3b3b" stroke-width="2"/><text x="1560" y="212">これから</text><text x="1560" y="236" font-size="17" fill="#555">毎朝の点検で確認</text></g>
+  </g>
+
+  <!-- 苦労したところ -->
+  <g filter="url(#rough)">
+    <path d="M48,300 L820,296 L824,890 L52,894 Z" fill="#fff" stroke="#3b3b3b" stroke-width="2.5" stroke-linejoin="round"/>
+  </g>
+  <text x="80" y="346" font-size="32" fill="#c92a2a">乗り越えた課題（HOMIS の画面の動きへの対策）</text>
+  <g font-size="21" fill="#2b2b2b">
+    <g>
+      <path d="M80,370 L800,370" stroke="#e9c9c9" stroke-width="2"/>
+      <text x="84" y="406" font-size="24" fill="#c92a2a">① S 欄が空のまま保存された（11/4 の 1 件）</text>
+      <text x="100" y="438">画面が遅い日に、見えていない欄へ文字が入った。</text>
+      <text x="100" y="468" fill="#1c7ed6">→ 見える欄を待つ・読み返す・確かめられなければ保存しない。</text>
+    </g>
+    <g>
+      <path d="M80,492 L800,492" stroke="#e9c9c9" stroke-width="2"/>
+      <text x="84" y="528" font-size="24" fill="#c92a2a">② 「入力途中のカルテが存在します」で新規が開かない</text>
+      <text x="100" y="560">職員さんが同じ患者さんのカルテを開いていると起きる。</text>
+      <text x="100" y="590" fill="#1c7ed6">→ 止めて知らせる → 今は 90 秒待って 1 回だけやり直す。</text>
+    </g>
+    <g>
+      <path d="M80,614 L800,614" stroke="#e9c9c9" stroke-width="2"/>
+      <text x="84" y="650" font-size="24" fill="#c92a2a">③ 同じアカウントの書きかけが「新規」で戻ってくる</text>
+      <text x="100" y="682">これまで起きていた上書きの原因。前の書きかけに別の本文が混ざる。</text>
+      <text x="100" y="712" fill="#1c7ed6">→ 2 分より前の書きかけが戻ったら書かない。</text>
+    </g>
+    <g>
+      <path d="M80,736 L800,736" stroke="#e9c9c9" stroke-width="2"/>
+      <text x="84" y="772" font-size="24" fill="#c92a2a">④ 同じ患者さんを 2 台で同時に書くおそれ</text>
+      <text x="100" y="804">FAX と問い合わせの列を分けると起きうる。</text>
+      <text x="100" y="834" fill="#1c7ed6">→ 患者さんごとの「札」を Cloud Storage に置き、1 台ずつ書く。</text>
+      <text x="100" y="866" font-size="18" fill="#6b6b6b">（本番で確認: FAX が 48 秒で書く間、問い合わせは 46 秒待って別のカルテに）</text>
+    </g>
+  </g>
+
+  <!-- よいところ -->
+  <g filter="url(#rough)">
+    <path d="M864,300 L1636,296 L1640,890 L868,894 Z" fill="#fff" stroke="#3b3b3b" stroke-width="2.5" stroke-linejoin="round"/>
+  </g>
+  <text x="896" y="346" font-size="32" fill="#2b8a3e">移行してよくなったところ</text>
+  <g font-size="21" fill="#2b2b2b">
+    <g>
+      <circle cx="916" cy="398" r="14" fill="#8ce99a" stroke="#3b3b3b" stroke-width="2"/><text x="916" y="405" font-size="18" text-anchor="middle">1</text>
+      <text x="944" y="406" font-size="24" fill="#2b8a3e">書いたあと、読み直して確かめる</text>
+      <text x="944" y="438">完了か・S と O が送ったとおりか。合わなければ失敗にする。</text>
+    </g>
+    <g>
+      <circle cx="916" cy="486" r="14" fill="#8ce99a" stroke="#3b3b3b" stroke-width="2"/><text x="916" y="493" font-size="18" text-anchor="middle">2</text>
+      <text x="944" y="494" font-size="24" fill="#2b8a3e">書けなければ 1 分以内に通知</text>
+      <text x="944" y="526">現場の Chat（直リンク付き）と DX の Chat へ通知し、見逃しを防ぐ。</text>
+    </g>
+    <g>
+      <circle cx="916" cy="574" r="14" fill="#8ce99a" stroke="#3b3b3b" stroke-width="2"/><text x="916" y="581" font-size="18" text-anchor="middle">3</text>
+      <text x="944" y="582" font-size="24" fill="#2b8a3e">カルテを書く処理を p281 から切り離した</text>
+      <text x="944" y="614">p281 のブラウザ操作が詰まっても、書き込み側はクラウドで動き続ける。</text>
+    </g>
+    <g>
+      <circle cx="916" cy="662" r="14" fill="#8ce99a" stroke="#3b3b3b" stroke-width="2"/><text x="916" y="669" font-size="18" text-anchor="middle">4</text>
+      <text x="944" y="670" font-size="24" fill="#2b8a3e">1 件 50 秒・順番に・記録が残る</text>
+      <text x="944" y="702">列で 1 件ずつ。結果の表とログで、いつ何を書いたか追える。</text>
+    </g>
+    <g>
+      <circle cx="916" cy="750" r="14" fill="#8ce99a" stroke="#3b3b3b" stroke-width="2"/><text x="916" y="757" font-size="18" text-anchor="middle">5</text>
+      <text x="944" y="758" font-size="24" fill="#2b8a3e">直すときは、テストと査読を通す</text>
+      <text x="944" y="790">自動テスト 182 件と事前の査読を通してから反映。</text>
+      <text x="944" y="820">本番を止めずに、細かな改善を段階的に反映できる体制に。</text>
+    </g>
+    <text x="944" y="866" font-size="18" fill="#6b6b6b">※ 患者さんの情報・鍵の値は、記録にもこの紙にも載せない決まり</text>
+  </g>
+
+  <!-- これから -->
+  <g filter="url(#rough)">
+    <path d="M48,926 L1636,922 L1640,1150 L52,1154 Z" fill="#fff9db" stroke="#3b3b3b" stroke-width="2.5" stroke-linejoin="round"/>
+  </g>
+  <text x="80" y="972" font-size="30" fill="#e67700">これから</text>
+  <g font-size="21" fill="#2b2b2b">
+    <text x="84" y="1014">● 毎朝の点検: FAX・問い合わせの件数、失敗の有無、書きかけの残りを集計して報告</text>
+    <text x="84" y="1050">● まれな順番待ちの場面の細かな改善（3 件）は次の版で。同じライターを使うレントゲンのカルテも共通の仕組みで保護される</text>
+    <text x="84" y="1086">● Tukusi のロボット03 は FAX・問い合わせのカルテ書き込みから切り離した。文書生成など他の業務は従来どおり</text>
+    <text x="84" y="1122">● 同じ書類が FAX と SCAN の両方で届く件は、画質のよい SCAN に一本化する方向で別途検討中（未決定）</text>
+  </g>
+</svg>
+<div class="hist">
+  <h2>更新履歴</h2>
+  2026-11-05　v1.3　2 枚を 1 枚物の HTML にまとめた（印刷すると A4 横 2 枚）。<br>
+  2026-11-05　v1.2　初版を公開（黒ヤギ 2 回の査読【進めてよい】）。流れの図・結果の数字・Tukusi 時代と比べるときの注意／道のり・乗り越えた課題・移行してよくなったところ・これから。
+</div>
+</div>
+</body>
+</html>
