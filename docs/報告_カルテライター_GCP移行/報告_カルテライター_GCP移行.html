@@ -10,7 +10,7 @@
   html,body{margin:0;background:#e9ecef;font-family:'BIZ UDPGothic','BIZ UDPゴシック','Meiryo',sans-serif;color:#343a40}
   .wrap{max-width:1684px;margin:0 auto;padding:16px}
   .sum{background:#fff;border-left:6px solid #1c7ed6;border-radius:8px;padding:14px 20px;margin-bottom:16px;line-height:1.7;font-size:17px}
-  .sum ul{margin:6px 0 0 20px;padding:0}
+  .sum .d{float:right;color:#868e96;font-size:14px}
   svg{width:100%;height:auto;display:block;box-shadow:0 2px 14px rgba(0,0,0,.18);margin-bottom:18px}
   #page1{background:#fff}
   #page2{background:#fffdf6}
@@ -23,13 +23,9 @@
 <body>
 <div class="wrap">
 <div class="sum">
-  <strong>FAX・問い合わせのカルテ、書き道を Tukusi から GCP へ（報告・法人内）</strong>　2026-11-05　DX推進部
-  <ul>
-    <li>FAX（11/2〜）と問い合わせ（11/5〜）のカルテ書き込みを、Tukusi のブラウザ操作から GCP のカルテライターへ移した。</li>
-    <li>書いたあとに読み直して確かめ、書けなければ 1 分以内に現場と DX の Chat へ通知する。対策後に気づかない失敗は 0 件。</li>
-    <li>11/2〜11/5 の FAX 本番 152 件のうち成功 147 件（97%）。問い合わせ本番は 9 件すべて成功。1 件約 50 秒。</li>
-    <li>カルテライターも、画面を表示しない Chrome で HOMIS の画面を人と同じ順に操作する「ロボット」。動く場所をクラウドに移し、読み直しと守りを足した。HOMIS の裏の入口へ直接書く方式（JS）は使わない（11/5 決定）。次は、入口を決まった形の JSON にそろえる（書き方はロボットのまま）。</li>
-  </ul>
+  <strong>FAX（11/2〜）と問い合わせ（11/5〜）のカルテを、GCP のカルテライターで書くようにしました。</strong><br>
+  書き方は今までどおり画面を操作するロボット。次は、受け取る形を共通の JSON にそろえます。
+  <span class="d">2026-11-05　DX推進部（法人内）</span>
 </div>
 <svg id="page1" viewBox="0 0 1684 1190" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="カルテの書き道を Tukusi から GCP へ変えた報告 1枚目 流れと数字"
      font-family="'BIZ UDPGothic','BIZ UDPゴシック','Meiryo',sans-serif">
@@ -59,7 +55,7 @@
     <line x1="330" y1="207" x2="600" y2="230" stroke="#495057" stroke-width="3" marker-end="url(#ar)"/>
     <line x1="330" y1="275" x2="600" y2="250" stroke="#495057" stroke-width="3" marker-end="url(#ar)"/>
     <rect x="610" y="186" width="420" height="106" rx="10" fill="#fff3bf" stroke="#f08c00" stroke-width="2"/>
-    <text x="820" y="222" text-anchor="middle" font-weight="700">Tukusi のロボット（p281 のパソコン）</text>
+    <text x="820" y="222" text-anchor="middle" font-weight="700">Tukusi のロボット（おひさまサーバー）</text>
     <text x="820" y="252" text-anchor="middle" font-size="19">ブラウザを人のように操作して HOMIS に貼る</text>
     <text x="820" y="278" text-anchor="middle" font-size="17" fill="#c92a2a">操作が終われば「成功」。保存後の中身は確かめない</text>
     <line x1="1030" y1="239" x2="1120" y2="239" stroke="#495057" stroke-width="3" marker-end="url(#ar)"/>
@@ -67,7 +63,7 @@
     <text x="1225" y="245" text-anchor="middle" font-weight="700">HOMIS</text>
     <text x="1345" y="226" font-size="19" fill="#c92a2a">● 空のカルテが残る（7 件）</text>
     <text x="1345" y="256" font-size="19" fill="#c92a2a">● 同じ患者さんを上書き（3 回）</text>
-    <text x="1345" y="286" font-size="19" fill="#c92a2a">● p281 の操作が詰まると止まる</text>
+    <text x="1345" y="286" font-size="19" fill="#c92a2a">● サーバーが詰まると止まる</text>
   </g>
 
   <!-- 後 -->
@@ -232,8 +228,8 @@
     </g>
     <g>
       <circle cx="916" cy="574" r="14" fill="#8ce99a" stroke="#3b3b3b" stroke-width="2"/><text x="916" y="581" font-size="18" text-anchor="middle">3</text>
-      <text x="944" y="582" font-size="24" fill="#2b8a3e">カルテを書く処理を p281 から切り離した</text>
-      <text x="944" y="614">p281 のブラウザ操作が詰まっても、書き込み側はクラウドで動き続ける。</text>
+      <text x="944" y="582" font-size="24" fill="#2b8a3e">カルテを書く処理をおひさまサーバーから切り離した</text>
+      <text x="944" y="614">おひさまサーバーのブラウザ操作が詰まっても、書き込み側はクラウドで動き続ける。</text>
     </g>
     <g>
       <circle cx="916" cy="662" r="14" fill="#8ce99a" stroke="#3b3b3b" stroke-width="2"/><text x="916" y="669" font-size="18" text-anchor="middle">4</text>
@@ -263,6 +259,8 @@
 </svg>
 <div class="hist">
   <h2>更新履歴</h2>
+  2026-11-05　v1.6　冒頭の要点を 2 行に絞った（数字は図の中だけに）。<br>
+  2026-11-05　v1.5　Tukusi のロボットが動く場所を「p281 のパソコン」から「おひさまサーバー」に訂正（4 か所）。<br>
   2026-11-05　v1.4　要点に「カルテライターも画面を操作するロボット。裏の入口へ直接書く方式（JS）は使わない（11/5 決定）。次は入口を決まった形の JSON にそろえる」を追記。<br>
   2026-11-05　v1.3　2 枚を 1 枚物の HTML にまとめた（印刷すると A4 横 2 枚）。<br>
   2026-11-05　v1.2　初版を公開（黒ヤギ 2 回の査読【進めてよい】）。流れの図・結果の数字・Tukusi 時代と比べるときの注意／道のり・乗り越えた課題・移行してよくなったところ・これから。
