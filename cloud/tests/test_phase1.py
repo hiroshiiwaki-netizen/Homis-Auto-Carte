@@ -47,6 +47,7 @@ sys.modules["shared_log"] = sl
 
 import navi_callback  # noqa: E402
 import server  # noqa: E402
+from fake_gcs import FakeGCS  # noqa: E402  v3.9.0: 患者さんごとの札の置き場（偽物）
 
 ORIG_WRITE_KARTE = server.write_karte  # v3.1.2 のテストで本物の write_karte を使う（setUp で偽物に差し替える前に控える）
 navi_callback.WAITS = (0, 0)  # テストでは待たない
@@ -121,7 +122,17 @@ def post(url, payload, key="k-test"):
 
 
 class Phase1(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.gcs = FakeGCS()   # v3.9.0: 札の置き場。write_karte は札が取れないと書かないので、全テストで偽物を立てる
+        cls.gcs.install_env()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.gcs.shutdown()
+
     def setUp(self):
+        self.gcs.reset()
         self.navi = FakeNavi()
         self.dx = FakeNavi()  # DX Chat も同じ偽物で本文を覚える（302 で GET → 200）
         os.environ["NAVI_WEBAPP_URL"] = self.navi.url

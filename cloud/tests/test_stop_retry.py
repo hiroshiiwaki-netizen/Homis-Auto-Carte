@@ -52,6 +52,8 @@ from selenium.webdriver.chrome.options import Options  # noqa: E402
 
 import server  # noqa: E402
 import template_engine  # noqa: E402
+from fake_gcs import FakeGCS  # noqa: E402
+import patient_lock as pl  # noqa: E402
 from browser_actions import BrowserActions  # noqa: E402
 
 PAGE = """<!doctype html><meta charset="utf-8"><body>
@@ -81,6 +83,7 @@ function openLater() {
     '"><div id="inner"></div></div>';
   if (m === 'noguard') document.getElementById('pdetail_karteedit').innerHTML = '<div id="inner"></div>';
   if (m === 'noguard') m = '500';
+  if (m === 'nohash') { window.NOHASH = true; m = '500'; }   // 保存はするが URL に karte_id が付かない（カルテ番号が取れない形）
   if (m === 'hidden') openForm(true); else if (m.indexOf('never') !== 0) setTimeout(openForm, Number(m));
 }
 // hidden: 中断ボタンは出るのに S 欄だけ見えない（0017 と同じく、そのまま押すと S が空で保存される）
@@ -93,7 +96,7 @@ function openForm(hideS) {
     if (confirm('保存しますか') && confirm('中断しますか')) {
       call('/save', {karte_id: KID, kind: document.querySelector('input[name=kind]:checked').value,
                      s: document.querySelector('#form #subjective').value});
-      location.hash = 'karte_id=' + KID;
+      if (!window.NOHASH) location.hash = 'karte_id=' + KID;
     }
     return false;
   };
@@ -194,6 +197,8 @@ class StopRetry(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.homis = FakeHomis()
+        cls.gcs = FakeGCS()   # v3.9.0: 患者さんごとの札の置き場（偽物）
+        cls.gcs.install_env()
         with open(os.path.join(SRC, "templates", "bot_s_interrupt.yaml"), encoding="utf-8") as f:
             tpl = yaml.safe_load(f)
         cls.tpl = tpl
@@ -212,6 +217,7 @@ class StopRetry(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         cls.homis.httpd.shutdown()
+        cls.gcs.shutdown()
 
     @classmethod
     def fake_verify(cls, homis_id, kid, s, o, expect="done"):
@@ -223,14 +229,18 @@ class StopRetry(unittest.TestCase):
 
     def setUp(self):
         self.homis.reset()
+        self.gcs.reset()
         getattr(server, "_LEFT_KIDS", {}).clear()   # v3.7.0: 覚えた番号はテストごとに空から（直す前の版でも流せるように）
         self._keep_wait = getattr(server, "BLOCKED_RETRY_WAIT_SEC", None)
         if self._keep_wait is not None:
             server.BLOCKED_RETRY_WAIT_SEC = 0.5   # v3.8.0: テストでは 90 秒も待たない
+        self._keep_poll = pl.LOCK_POLL_SEC
+        pl.LOCK_POLL_SEC = 0.5                    # v3.9.0: 札の取り直しも 5 秒も寝ない
 
     def tearDown(self):
         if self._keep_wait is not None:
             server.BLOCKED_RETRY_WAIT_SEC = self._keep_wait
+        pl.LOCK_POLL_SEC = self._keep_poll
 
     def write(self, oid):
         return server.write_karte({"orderId": oid, "homisId": "2277808", "template": "bot_s_interrupt", "sContent": TEXT})
@@ -449,6 +459,106 @@ class StopRetry(unittest.TestCase):
         self.assertEqual(out["retried"], "S欄に入力")
         self.assertIn("やり直しても同じ", self.homis.dx[0])
         self.assertNotIn("入力途中のカルテ", self.homis.dx[0])
+
+    # --- v3.9.0 患者さんごとの札（同じ患者さんを2台で同時に書かない） ---
+    LOCK = "locks/2277808"
+
+    def test_k1_lock_taken_and_released(self):
+        self.homis.modes = ["500"]
+        out = self.write("BOT-1-20261105150001")
+        self.assertTrue(out["success"])
+        self.assertIsNone(self.gcs.gen(self.LOCK))                                   # 書き終えたら外す
+        self.assertEqual((self.gcs.count("POST"), self.gcs.count("DELETE")), (1, 1))
+        self.assertEqual(out["lock_waited_sec"], 0.0)
+
+    def test_k2_same_patient_two_at_once_become_two_kartes(self):
+        # 列を分けたあとの形: 同じ患者さんの2件が別の台（ここでは2スレッド・2つの Chrome）で同時に来る。
+        # 札で順番になり、2件目の新規は（1件目が保存したあとなので）新しいカルテ＝2枚に分かれる。
+        # 札なし（3.8.0）だと、2件目の新規に1件目の書きかけが戻り、同じカルテに2件の S が入る（赤）
+        self.homis.modes = ["500", "500"]
+        outs = {}
+
+        def run(n):
+            outs[n] = self.write(f"BOT-1-2026110515000{n}")
+        ts = [threading.Thread(target=run, args=(n,)) for n in (2, 3)]
+        [t.start() for t in ts]
+        [t.join() for t in ts]
+        self.assertEqual([outs[2]["success"], outs[3]["success"]], [True, True])
+        self.assertEqual(sorted(x["karte_id"] for x in self.homis.saves), [1001, 1002])
+        self.assertEqual([reused for _, reused in self.homis.news], [False, False])   # 書きかけが戻った新規は無い
+        self.assertNotEqual(outs[2]["karte_id"], outs[3]["karte_id"])
+        self.assertIsNone(self.gcs.gen(self.LOCK))
+
+    def test_k3_leftover_editing_keeps_lock(self):
+        # 2回とも S を確かめられず書きかけを残した → 札を外さない（期限で消える・黒ヤギ仕様2回目 指摘3）
+        self.homis.modes = ["never", "never"]
+        out = self.write("BOT-1-20261105150004")
+        self.assertEqual(out["error_type"], "stopped:unverified_input")
+        self.assertIsNotNone(self.gcs.gen(self.LOCK))
+        self.assertEqual(self.gcs.count("DELETE"), 0)
+
+    def test_k4_busy_lock_means_no_write_and_notices(self):
+        # 別の台の札が期限内 → 待っても取れない → 新規を押さない・失敗・現場と DX に知らせ
+        self.gcs.put(self.LOCK, age_sec=10)
+        keep = pl.LOCK_WAIT_SEC
+        pl.LOCK_WAIT_SEC = 1.0
+        try:
+            out = self.write("BOT-1-20261105150005")
+        finally:
+            pl.LOCK_WAIT_SEC = keep
+        self.assertEqual((out["success"], out["error_type"], out["karte_id"]), (False, "locked:busy", ""))
+        self.assertEqual(self.homis.news, [])
+        self.assertEqual(len(self.homis.field), 1)
+        self.assertIn("順番", self.homis.field[0])
+        self.assertEqual(len(self.homis.dx), 1)
+        self.assertIn(self.LOCK, self.homis.dx[0])
+        self.assertGreaterEqual(out["lock_waited_sec"], 1.0)
+        self.assertGreaterEqual(out["total_sec"], 1.0)
+
+    def test_k5_storage_error_means_no_write(self):
+        # 置き場が使えない（403）→ 案A: 書かずに知らせる
+        self.gcs.fail_next = (403, 20)
+        out = self.write("BOT-1-20261105150006")
+        self.assertEqual((out["success"], out["error_type"]), (False, "locked:error"))
+        self.assertEqual(self.homis.news, [])
+        self.assertEqual(len(self.homis.field), 1)
+        self.assertIn("置き場", self.homis.field[0])
+        self.assertIn("LOCK_BUCKET", self.homis.dx[0])
+
+    def test_k6_result_sheet_closed_when_locked_out(self):
+        # 結果シートの受付のあとに札で止まっても、行は fail で閉じる（黒ヤギ仕様1回目 指摘3）
+        self.gcs.put(self.LOCK, age_sec=10)
+        calls = []
+        keep = (server.sheet_enabled, server.claim, server.finish, pl.LOCK_WAIT_SEC)
+        server.sheet_enabled = lambda: True
+        server.claim = lambda oid, gid: {"created": True, "row": 7, "status": "accepted"}
+        server.finish = lambda row, st, url, err: calls.append((row, st, url, err))
+        pl.LOCK_WAIT_SEC = 0.5
+        try:
+            out = self.write("BOT-1-20261105150007")
+        finally:
+            server.sheet_enabled, server.claim, server.finish, pl.LOCK_WAIT_SEC = keep
+        self.assertEqual(out["error_type"], "locked:busy")
+        self.assertEqual(calls, [(7, "fail", "", "locked:busy")])
+
+    def test_k7_expiring_lock_is_waited_for_and_total_includes_wait(self):
+        # 期限切れ寸前の札（落ちた台の残り）→ 待って拾って書く。共有ログの経過時間には待ちが入る
+        self.gcs.put(self.LOCK, age_sec=pl.LOCK_TTL_SEC - 1.5)
+        self.homis.modes = ["500"]
+        out = self.write("BOT-1-20261105150008")
+        self.assertTrue(out["success"])
+        self.assertGreaterEqual(out["lock_waited_sec"], 1.0)
+        self.assertGreaterEqual(out["total_sec"], out["lock_waited_sec"])
+        self.assertEqual(self.gcs.count("DELETE"), 2)                                # 期限切れを消した1回＋自分の札を外した1回
+
+    def test_k8_opened_without_karte_id_keeps_lock(self):
+        # 新規は開いたのにカルテ番号が取れずに終わった（保存できていない見込み）→ 札を外さない（黒ヤギ実装1回目 指摘3）
+        self.homis.modes = ["nohash"]
+        out = self.write("BOT-1-20261105150009")
+        self.assertEqual((out["success"], out["error_type"], out["karte_id"]), (False, "no_karte_id", ""))
+        self.assertTrue(out["karte_opened"])
+        self.assertIsNotNone(self.gcs.gen(self.LOCK))
+        self.assertEqual(self.gcs.count("DELETE"), 0)
 
 
 if __name__ == "__main__":

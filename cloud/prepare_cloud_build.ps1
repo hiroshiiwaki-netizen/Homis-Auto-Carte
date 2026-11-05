@@ -18,6 +18,7 @@ $files = @(
   @{ From = (Join-Path $here "result_sheet.py"); To = (Join-Path $dst "result_sheet.py") }
   @{ From = (Join-Path $here "navi_callback.py"); To = (Join-Path $dst "navi_callback.py") }
   @{ From = (Join-Path $here "verify_karte.py"); To = (Join-Path $dst "verify_karte.py") }
+  @{ From = (Join-Path $here "patient_lock.py"); To = (Join-Path $dst "patient_lock.py") }
   @{ From = (Join-Path $src "template_engine.py"); To = (Join-Path $dst "template_engine.py") }
   @{ From = (Join-Path $src "browser_actions.py"); To = (Join-Path $dst "browser_actions.py") }
   @{ From = (Join-Path $src "clipboard_utils.py"); To = (Join-Path $dst "clipboard_utils.py") }

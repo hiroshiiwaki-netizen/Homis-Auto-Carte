@@ -2,9 +2,16 @@
 """Cloud Run 受け口（フェーズ2a＋失敗ガード）
 
 ==============================================================================
-バージョン: 3.8.0
+バージョン: 3.9.0
 最終更新: 2026/11/05
 改定履歴（新しい順・全体は docs/SPEC_v3_cloud.md 0章「モジュール別の版」）:
+  v3.9.0 11/05 患者さんごとの札（patient_lock.py 1.0.0・Cloud Storage の LOCK_BUCKET）。問い合わせの列を FAX と分けると別の台が同じ患者さんを
+               同時に書きうる（HOMIS は同じアカウントの編集中を新規で返す）ので、結果シートの受付のあと・新規の前に札を取り、
+               書き終わり（読み直し・知らせ・結果シートまで）で外す。3型紙とも。札待ちは最長 320 秒、取れなければ locked:busy、
+               置き場が使えなければ locked:error（案A・書かずに現場と DX に知らせ、結果シートも fail で閉じる）。
+               書きかけ（編集中）を残して終わったときは札を外さず期限（300秒）で消えるに任せる（次の台が新規を押すころには
+               v3.7.0 の守りが時刻で止められる・黒ヤギ仕様2回目 指摘3）。v3.8.0・v3.6.0 のやり直しの時間の見張りは札を取ってから数える
+               （共有ログの経過時間は受け取りから・指摘4）。仕様 docs/FAXカルテ_検討/SPEC_問い合わせの列を分ける_v0.md v0.4
   v3.8.0 11/05 新規で「入力途中のカルテが存在します」と止められたら（blocked:in_progress_karte）、90秒あけて1回だけ最初からやり直す。
                FAX（fax_so）と問い合わせ（bot_s_interrupt）だけ。レントゲンと、ほかの文の知らせ（unexpected_alert）は今までどおり。
                待つ前の経過＋90秒＋120秒（やり直し1回分の見込み）が 280 秒を超えるならやり直さない（Cloud Run の上限 300 秒）。
@@ -82,6 +89,7 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 
 import navi_callback
+import patient_lock
 import verify_karte
 from browser_actions import BrowserActions
 from result_sheet import claim, enabled as sheet_enabled
@@ -171,7 +179,10 @@ FIELD_REASON = {
     "verify:o_mismatch": "O が送った文と違います",
     "stopped:unverified_input": "S を入れたことを確かめられず、保存しませんでした",
     "blocked:reused_editing": "前に書けずに残った書きかけのカルテが新規で戻ってきたため、書かずに止めました",
+    "locked:busy": "同じ患者さんのカルテを別の仕事が書いていて、順番を待ちましたが時間内に回ってきませんでした",
+    "locked:error": "同時に書くのを防ぐ札の置き場が使えず、安全のため書きませんでした",
 }
+
 
 DX_EMPTY = {
     "xray_karte": (
@@ -526,6 +537,73 @@ def write_karte(data: dict) -> dict:
             logger.info("受付済み未完了のため書かない orderId=%s", order_id)
             return result_from_row(claimed, order_id)
         sheet_row = int(claimed.get("row") or 0)
+    # v3.9.0: 患者さんごとの札（別の台が同じ患者さんを同時に書かない）。取れなければ書かずに知らせる（案A）
+    lock = patient_lock.acquire(homis_id, order_id)
+    if lock["status"] != "ok":
+        return _locked_out(data, order_id, homis_id, t0, sheet_row, lock)
+    _TLS.lock = (homis_id, lock["generation"])
+    _TLS.keep_lock = False
+    try:
+        return _write_locked(data, order_id, homis_id, t0, time.time(), sheet_row, lock)
+    finally:
+        _release_lock(order_id)
+
+
+def _locked_out(data: dict, order_id: str, homis_id: str, t0: float, sheet_row: int, lock: dict) -> dict:
+    """v3.9.0: 札が取れなかった（busy＝時間内に順番が来ない／error＝置き場が使えない）。何も書かずに、
+    共有ログ・現場（本番）・DX・結果シート（fail）をほかの失敗と同じ流れで出す（黒ヤギ仕様1回目 指摘3）"""
+    err = "locked:busy" if lock["status"] == "busy" else "locked:error"
+    total = time.time() - t0
+    log_result(order_id, False, "", err, total)
+    if _is_live_fax(data) or _is_live_bot(data):
+        _notify_field(order_id, _patient_url(homis_id, ""), err, _template_name(data))
+    navi_callback.notify_dx(
+        f"HOMIS ライター（GCP）: {FIELD_REASON[err]}。何も書かずに止めました"
+        f"（札 {patient_lock.lock_name(homis_id)}・待ち {lock.get('waited_sec', 0)}秒・{lock.get('reason', '')}）。"
+        + ("札の置き場（LOCK_BUCKET）の設定・権限を白ヤギが確かめます。" if err == "locked:error"
+           else "前の仕事が長引いているか、札が残っています（期限 5 分で消えます）。白ヤギが確かめます。")
+        + f"\n{_patient_url(homis_id, '')}\norderId={order_id}",
+        order_id,
+    )
+    if sheet_row:
+        try:
+            finish(sheet_row, "fail", "", err)
+        except Exception:
+            logger.exception("結果シート更新失敗 orderId=%s", order_id)
+    return {
+        "orderId": order_id,
+        "success": False,
+        "has_karte_id": False,
+        "error_type": err,
+        "karte_opened": False,
+        "total_sec": round(total, 1),
+        "karte_id": "",
+        "karte_url": "",
+        "failed_steps": [],
+        "verify": "",
+        "retried": "",
+        "retried_blocked": "",
+        "lock_waited_sec": lock.get("waited_sec", 0),
+    }
+
+
+def _release_lock(order_id: str) -> None:
+    """v3.9.0: 札を外す。書きかけ（編集中）を残して終わったときは外さず、期限（300秒）で消えるに任せる
+    （次の台が新規を押すころには書きかけが2分以上前になり、v3.7.0 の守りが時刻で止められる・黒ヤギ仕様2回目 指摘3）"""
+    homis_id, generation = getattr(_TLS, "lock", ("", ""))
+    _TLS.lock = ("", "")
+    if not generation:
+        return
+    if getattr(_TLS, "keep_lock", False):
+        logger.warning("書きかけを残したため札を外さない（期限で消える） %s 世代=%s orderId=%s",
+                       patient_lock.lock_name(homis_id), generation, order_id)
+        return
+    patient_lock.release(homis_id, generation, order_id)
+
+
+def _write_locked(data: dict, order_id: str, homis_id: str, t0: float, t_write: float, sheet_row: int, lock: dict) -> dict:
+    """v3.9.0: 札を持っている間の書き込み（新規〜読み直し〜知らせ〜結果シート）。中身は 3.8.0 の write_karte の後半と同じ。
+    t0＝受け取った時刻（共有ログの経過時間）・t_write＝札を取った時刻（やり直しの時間の見張り・黒ヤギ仕様2回目 指摘4）"""
     _start_order()
     _reset_opened()
     result = _run_once(data)
@@ -540,7 +618,7 @@ def write_karte(data: dict) -> dict:
     blocked_retry = ""
     if _blocked() == "in_progress_karte" and _template_name(data) in BLOCKED_RETRY_TEMPLATES:
         # v3.8.0: 新規は開いていない（何も書いていない）。少しあけて1回だけ最初からやり直す
-        spent = time.time() - t0
+        spent = time.time() - t_write   # v3.9.0: 札を取ってから数える（札待ちの時間は入れない）
         if spent + BLOCKED_RETRY_WAIT_SEC + BLOCKED_RETRY_RUN_SEC <= REQUEST_BUDGET_SEC:
             blocked_retry = "in_progress_karte"
             logger.warning("入力途中のカルテで止められたため %s 秒あけて1回だけやり直す orderId=%s",
@@ -553,9 +631,9 @@ def write_karte(data: dict) -> dict:
         else:
             logger.warning("入力途中のカルテで止められたが、時間が足りないのでやり直さない orderId=%s 経過=%.0f秒", order_id, spent)
     left_editing = ""
-    if _stopped() and time.time() - t0 + BLOCKED_RETRY_RUN_SEC > REQUEST_BUDGET_SEC:
+    if _stopped() and time.time() - t_write + BLOCKED_RETRY_RUN_SEC > REQUEST_BUDGET_SEC:
         # v3.8.0: 入力途中のやり直しのあとなどで時間が足りない。上限で切られると知らせが出ないので、やり直さず失敗で知らせる
-        logger.warning("保存せずに止めたが、時間が足りないのでやり直さない orderId=%s 経過=%.0f秒", order_id, time.time() - t0)
+        logger.warning("保存せずに止めたが、時間が足りないのでやり直さない orderId=%s 経過=%.0f秒", order_id, time.time() - t_write)
     elif _stopped():
         # v3.6.0: 保存せずに止めた（書きかけは編集中で残る）。同じアカウントの新規で同じカルテが戻るので、1回だけやり直す
         left_editing = _stopped()
@@ -571,6 +649,11 @@ def write_karte(data: dict) -> dict:
     kid = extract_karte_id(url)
     blocked = _blocked()
     stopped = _stopped()
+    # v3.9.0: この注文が書きかけ（編集中）を残して終わるときは札を外さない（_release_lock）。
+    # stopped＝2回とも S を確かめられず保存しなかった／left_editing かつ blocked＝1回目の書きかけが残ったまま2回目が新規で止まった／
+    # opened かつ kid なし＝新規は開いたのにカルテ番号が取れずに終わった（保存できていない見込み・黒ヤギ実装1回目 指摘3）。
+    # reused_editing（前の注文の書きかけが戻った）もここに入るが、外さなくても害は無い（次の台は v3.7.0 の守りで止まる）
+    _TLS.keep_lock = bool(stopped) or bool(left_editing and blocked) or bool(opened and not kid)
     if blocked:
         # v3.4.0: 新規が開けず止めた。何も保存していない（以後の手順は飛ばした）
         result["success"] = False
@@ -691,6 +774,7 @@ def write_karte(data: dict) -> dict:
         "verify": checked["verdict"] if checked else "",
         "retried": left_editing,   # v3.6.0: 1回目に止めた手順の名前（やり直さなかったら空）
         "retried_blocked": blocked_retry,   # v3.8.0: 入力途中のカルテで止められて、あけてやり直したら "in_progress_karte"
+        "lock_waited_sec": lock.get("waited_sec", 0),   # v3.9.0: 札を待った秒
     }
 
 
