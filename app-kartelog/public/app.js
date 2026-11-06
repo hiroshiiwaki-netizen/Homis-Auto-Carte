@@ -1,4 +1,5 @@
-// カルテライター 実行リスト 0.1.0（読むだけ・第1段）
+// カルテライター 実行リスト 0.3.2（読むだけ・第1段）
+// 0.3.2 (2026-11-06) クリニックを選ぶと、タブの件数・上の数字・棒グラフ・赤い知らせもその院だけで数える。件数の見出しに院名を出す
 // 文字はすべて esc() を通して出す（送られた中身にどんな文字があっても画面を壊さない）
 "use strict";
 
@@ -118,8 +119,11 @@ function filtered(rows) {
     && (!q || [r.order_id, r.patient && r.patient.homis_id, pi(r) && pi(r).name, pi(r) && pi(r).kana, pi(r) && pi(r).orca, pi(r) && pi(r).clinic, r.doc_type, r.source, r.sender].some((v) => String(v || "").toLowerCase().includes(q))));
 }
 
+const inClinic = (r) => !st.clinic || (pi(r) && pi(r).clinic === st.clinic);   // 0.3.2: クリニックを選んだらその院だけ
+
 function render() {
-  const rows = st.rows;
+  const all = st.rows;
+  const rows = all.filter(inClinic);   // 0.3.2: タブの件数・上の数字・棒グラフ・赤い知らせもクリニックで絞った結果（岩城さん 11/6）
   const counts = { all: rows.length };
   for (const r of rows) counts[tabOf(r)] = (counts[tabOf(r)] || 0) + 1;
   $("tabs").innerHTML = TABS.map(([k, label, dot]) => `<button class="tab ${st.tab === k ? "on" : ""}" data-tab="${k}" type="button"><span class="dot ${dot}"></span>${label}<span class="n">${counts[k] || 0}</span></button>`).join("")
@@ -129,11 +133,11 @@ function render() {
   const ok = base.filter((r) => r.view === "ok").length;
   const ng = base.filter(isFail);
   const run = base.filter(isRun).length;
-  $("kLabel").textContent = st.d === 7 ? "7日の件数" : (st.from && st.from !== todayStr() ? md(st.from + "T") + "の件数" : "今日の件数");
+  $("kLabel").textContent = (st.d === 7 ? "7日の件数" : (st.from && st.from !== todayStr() ? md(st.from + "T") + "の件数" : "今日の件数")) + (st.clinic ? "（" + st.clinic + "）" : "");
   const robot = document.querySelector(".robot");   // 0.2.0: 書込中・待機中があればせっせと揺れる・書込失敗があれば震える
   if (robot) {
-    robot.classList.toggle("robot-busy", rows.some(isRun));
-    robot.classList.toggle("robot-alert", !rows.some(isRun) && rows.some(isFail));   // "alert" は赤い枠の名前とぶつかる（0.2.x で消えた）
+    robot.classList.toggle("robot-busy", all.some(isRun));   // ロボットはライター全体の様子なので院で絞らない
+    robot.classList.toggle("robot-alert", !all.some(isRun) && all.some(isFail));   // "alert" は赤い枠の名前とぶつかる（0.2.x で消えた）
   }
   $("kAll").textContent = base.length; $("kOk").textContent = ok; $("kNg").textContent = ng.length; $("kRun").textContent = run;
   const done = ok + ng.length;
@@ -155,9 +159,10 @@ function render() {
   alertBox.classList.toggle("on", ng.length > 0);
   alertBox.innerHTML = ng.length ? `<span class="big">🚨</span><div><b>書込失敗が ${ng.length} 件あります。</b><br><span class="why">いちばん新しいもの：${esc(hm(ng[0].received_at))}　${esc(SRC[ng[0].route] || "")}　${esc(ng[0].view === "stale" ? "停止の疑い" : reason(ng[0].error_type))}</span></div><button class="go" id="onlyFail" type="button">書込失敗だけ見る</button>` : "";
 
-  const errs = [...new Set(rows.map((r) => r.error_type).filter(Boolean))].sort();
+  // 0.3.2: 選んでいる値は、その日に 1 件も無くても選択欄に残す（表示が「すべて」に戻ったのに中では絞ったまま、を防ぐ）
+  const errs = [...new Set(rows.map((r) => r.error_type).concat(st.err).filter(Boolean))].sort();
   $("err_type").innerHTML = `<option value="">エラーの種類：すべて</option>` + errs.map((e) => `<option value="${esc(e)}" ${st.err === e ? "selected" : ""}>${esc(reason(e).slice(0, 26))}</option>`).join("");
-  const clinics = [...new Set(rows.map((r) => pi(r) && pi(r).clinic).filter(Boolean))].sort();
+  const clinics = [...new Set(all.map((r) => pi(r) && pi(r).clinic).concat(st.clinic).filter(Boolean))].sort();
   $("clinic").innerHTML = `<option value="">クリニック：すべて</option>` + clinics.map((c) => `<option value="${esc(c)}" ${st.clinic === c ? "selected" : ""}>${esc(c)}</option>`).join("");
   $("tests").classList.toggle("hidden", !st.me.admin);
   $("tests").classList.toggle("on", st.tests);
