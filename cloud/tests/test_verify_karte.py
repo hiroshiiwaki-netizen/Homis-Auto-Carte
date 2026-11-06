@@ -235,10 +235,43 @@ class VerifyKarte(unittest.TestCase):
             self.assertEqual(r["verdict"], "ok_processed", st)
             self.assertNotIn("太郎", json.dumps(r, ensure_ascii=False))
 
-    def test_i7_processed_but_s_changed_is_not_ok(self):
-        # 人が完了にしたが S が違う → 書けたかどうか分からないので今まで通り失敗側
+    def test_i7_processed_and_s_edited_is_ok(self):
+        # v1.4.0: 人が完了にして S も直した → 人が S を直すことがある（岩城さん 11/6「大きい心で」）。成功・reason=s_edited
         self.h.karte_script = [self.bot(status="7", who="職員 太郎", s="別の文"), self.bot(status="7", who="職員 太郎", s="別の文")]
+        r = self.run_i()
+        self.assertEqual((r["verdict"], r["reason"]), ("ok_processed", "s_edited"))
+        self.assertNotIn("別の文", json.dumps(r, ensure_ascii=False))
+
+    def test_i10_opened_by_human_right_after(self):
+        # v1.4.0: 中断で書いた直後に人が開いた（診察中 1・ORCA登録不要(編集中) 70）。開くだけでは更新者は変わらない見込みなので更新者は見ない
+        for st in ("1", "70"):
+            for who in ("おひさまロボット GCP", "職員 太郎"):
+                self.h.karte_script = [self.bot(status=st, who=who), self.bot(status=st, who=who)]
+                r = self.run_i()
+                self.assertEqual((r["verdict"], r["reason"]), ("ok_processed", ""), (st, who))
+
+    def test_i11_opened_and_s_edited_is_ok(self):
+        self.h.karte_script = [self.bot(status="1", s="直した文", o="メモ"), self.bot(status="1", s="直した文", o="メモ")]
+        r = self.run_i()
+        self.assertEqual((r["verdict"], r["reason"]), ("ok_processed", "s_edited"))
+
+    def test_i12_editing_with_empty_s_is_still_failure(self):
+        # ロボットが中断で保存できず書きかけが残った（S が空）→ 今まで通り失敗。人が完了にしても S が空なら失敗
+        for st, who in (("1", "おひさまロボット GCP"), ("70", "おひさまロボット GCP"), ("7", "職員 太郎"), ("1", "職員 太郎")):
+            self.h.karte_script = [self.bot(status=st, who=who, s=""), self.bot(status=st, who=who, s="")]
+            self.assertEqual(self.run_i()["verdict"], "not_interrupted", (st, who))
+        self.h.karte_script = [self.bot(status="1", s=" \n "), self.bot(status="1", s=" \n ")]   # 空白だけも空
         self.assertEqual(self.run_i()["verdict"], "not_interrupted")
+
+    def test_i13_other_statuses_unchanged(self):
+        # 取消（0）は人が開いた扱いにしない
+        self.h.karte_script = [self.bot(status="0"), self.bot(status="0")]
+        self.assertEqual(self.run_i()["verdict"], "not_interrupted")
+
+    def test_i14_fax_opened_is_still_not_completed(self):
+        # FAX（expect=done）は変えない: 診察中なら今まで通り not_completed
+        self.h.karte_script = [karte(status="1"), karte(status="1")]
+        self.assertEqual(self.run_v()["verdict"], "not_completed")
 
     def test_i8_writer_completed_itself_is_still_failure(self):
         # ライター自身が完了にしてしまった（本当の失敗）は今まで通り

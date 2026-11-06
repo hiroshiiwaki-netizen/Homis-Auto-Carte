@@ -2,9 +2,14 @@
 """書いたカルテを読み直して確かめる（読むだけ）
 
 ==============================================================================
-バージョン: 1.3.0
+バージョン: 1.4.0
 最終更新: 2026/11/06
 改定履歴（全体は docs/SPEC_v3_cloud.md 0章「モジュール別の版」）:
+  v1.4.0 11/06 問い合わせで、読み直したときに人が開いている途中（診察中 1・ORCA登録不要(編集中) 70）でも ok_processed。
+               11/6 15:37 問い合わせ 0033 で、中断で保存した 2 秒以内に人が開いて status=1 になり not_interrupted の空振り（岩城さん「書きこんですぐに編集されたパターン」）。
+               人が S を直すこともあるので（岩城さん「Sも編集される可能性があるので大きい心で」）、人が処理した・開いている場合は
+               S は「空でない」だけを見る（違えば reason=s_edited）。ロボットが中断で保存できなかったときは S が空のまま残るので失敗のまま。
+               ライター自身が完了にした（更新者がライター）・中断のまま S が違う・O が違う・更新者が別（not_mine）は今まで通り
   v1.3.0 11/06 問い合わせ（expect="interrupt"）で、読み直したときにもう「完了」（3・5・6・7）になっていて、最後の更新者がライター以外・S が送ったとおりなら、
                書いた直後に人（HIO）が処理したとみて ok_processed（書込成功）。11/6 13:49 問い合わせ 0026 で、中断で保存した 10 秒後に
                状態 7（ORCA登録不要）になり not_interrupted の空振りが出た（岩城さん「書いた瞬間に HIO さんが処理するときもある」）。
@@ -33,7 +38,8 @@
   not_completed  完了になっていない（編集中・中断・取消）
   not_interrupted （問い合わせ）中断になっていない
   not_mine       （問い合わせ）最後の更新者がライター自身ではない（ほかの人のカルテを読んでいる見込み）
-  ok_processed   （問い合わせ）書いた直後に人が処理して完了にした（更新者がライター以外・S 一致）。書込成功（v1.3.0）
+  ok_processed   （問い合わせ）書いた直後に人が処理して完了にした（更新者がライター以外）か、人が開いている途中（1・70）。
+                 S は空でなければよい（人が直すことがある・違えば reason=s_edited）。書込成功（v1.3.0・v1.4.0）
   s_mismatch     S が違う
   o_mismatch     O が違う
   unverified     読めなかった（ログイン・通信・形が違う）。書けなかったとは限らない
@@ -53,6 +59,7 @@ TIMEOUT_SEC = 20
 WAIT_SEC = 2.0
 DONE_STATUS = {"3", "5", "6", "7"}
 INTERRUPT_STATUS = {"2"}   # v1.1.0: 問い合わせ（bot_s_interrupt）は中断で残すのが正しい
+OPENED_STATUS = {"1", "70"}   # v1.4.0: 人がカルテを開いている途中（編集画面を開くだけでこの状態になる）
 STATUS_LABEL = {"0": "取消", "1": "診察中", "2": "診療中断", "3": "診察完了", "5": "ORCA送信済",
                 "6": "ORCA登録済", "7": "ORCA登録不要", "70": "ORCA登録不要(編集中)"}
 
@@ -128,9 +135,14 @@ def verify(homis_id: str, karte_id: str, s_expect: str, o_expect: str, expect: s
     out.update(status=str(karte.get("status")), s_len=len(s_got), o_len=len(o_got))
     out["status_label"] = STATUS_LABEL.get(out["status"], "状態" + out["status"])
     updater = str((karte.get("upd_user") or {}).get("full_name") or "") if isinstance(karte.get("upd_user"), dict) else ""
-    if (expect == "interrupt" and out["status"] in DONE_STATUS and updater
-            and _clean_name(updater) != _expected_updater() and s_got == _norm(s_expect)):
-        out["verdict"] = "ok_processed"   # v1.3.0: 書いた直後に人（HIO）が処理して完了にした（名前は記録に出さない）
+    human_done = out["status"] in DONE_STATUS and updater and _clean_name(updater) != _expected_updater()
+    if expect == "interrupt" and (human_done or out["status"] in OPENED_STATUS) and s_got:
+        # v1.3.0: 書いた直後に人（HIO）が処理して完了にした（名前は記録に出さない）
+        # v1.4.0: 人が開いている途中（診察中 1・ORCA登録不要(編集中) 70）も同じ扱い。人が S を直すこともあるので、
+        #         S は「空でない」だけを見る（ロボットが中断で保存できなかったときは S が空のまま残る）
+        out["verdict"] = "ok_processed"
+        if s_got != _norm(s_expect):
+            out["reason"] = "s_edited"   # 人が S を直した見込み（中身は出さない）
     elif out["status"] not in target:
         out["verdict"] = "not_interrupted" if expect == "interrupt" else "not_completed"
     elif expect == "interrupt" and _clean_name(updater) != _expected_updater():
