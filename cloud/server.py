@@ -13,6 +13,8 @@
                止まった後の新規での取り直し・入力途中の90秒やり直し・前の書きかけの守りは使わない（新規の守りのため）。読み直しは中断で（O は見ない）。
                知らせは DX の Chat だけ（送った先生・理由・直リンク・注文番号）。現場用 KARTE_FIELD_WEBHOOK はまだ無い。
                黒ヤギ実装1回目: ①では読み直しの ok_processed（人が処理した）を認めず not_interrupted に／編集ボタンは押す前に開いた扱い
+               黒ヤギ実装2回目: 編集ボタンが見つからない（読み込みの遅れ等）ときは開いていない扱い（見つかってから開いた扱い）・時間切れ（timeout）として自動やり直しに回す／
+               読み直しで中断になっていない失敗の DX の知らせに「書いた直後に先生が開いた場合も」の一言
   v3.12.0 11/06 書込失敗の自動やり直し（auto_retry.py 1.0.0・RETRY_MODE=on のときだけ・仕様 docs/SPEC_実行リスト_v0.md v1.2 14章）。
                HOMIS に何も残っていない失敗（locked・入力途中・知らせ・ログイン等）だけ、同じ列に -A1（5分後）・-A2（15分後）・-A3（30分後）を予約で入れる。
                最初の失敗でカルテ一覧の一番大きい番号を控え（札を外す前）、やり直しの前に控えより新しいカルテがあれば書かずに止める（人が書いた見込み）。
@@ -109,6 +111,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
+from selenium.common.exceptions import TimeoutException
 
 import navi_callback
 import patient_lock
@@ -246,6 +249,7 @@ def _reset_opened():
     _TLS.edit_checked = False    # v3.7.0: この回で書きかけの守りを見たか
     _TLS.current_kid = ""        # v3.7.0: この回で開いたカルテの番号（編集画面から）
     _TLS.edit_mode = False       # v3.13.0: karte_edit を書いている間だけ True
+    _TLS.edit_button_missing = False   # v3.13.0: 編集ボタンが見つからなかった（押していない）
 
 
 def _start_order():
@@ -427,7 +431,14 @@ def _click_cloud(self, selector, selector_type="css", text_contains=""):
         self.driver.execute_script("window.confirm=()=>true; window.alert=()=>{};")
         logger.info("保存前にアラート自動OKを設定")
     if selector == "#karteEdit":
-        # v3.13.0: 押す前に「開いた」とする（押している途中で Chrome が落ちても、開いたかもしれない＝やり直さない側・黒ヤギ 3.13.0 実装1回目 指摘3）
+        # v3.13.0: 押す前に「開いた」とする（押している途中で Chrome が落ちても、開いたかもしれない＝やり直さない側・黒ヤギ 3.13.0 実装1回目 指摘3）。
+        # ただしボタンが見つからない（読み込みの遅れ等・ここで例外）なら押していない＝開いていないので、見つかってから立てる（実装2回目 指摘1）
+        try:
+            self._find_element(selector, clickable=True, selector_type=selector_type)
+        except TimeoutException:
+            _TLS.edit_button_missing = True   # 押していない＝時間切れとして自動やり直しに回す（edit_outcome）
+            logger.warning("編集ボタンが見つからない（押していない）")
+            raise
         _TLS.karte_opened = True
     out = _orig_click(self, selector, selector_type, text_contains)
     if selector == "#karteEdit":
@@ -744,16 +755,24 @@ def edit_outcome(result: dict, opened: bool, blocked: str, stopped: str, err: st
     if stopped:
         if opened:
             return False, "stopped:unverified_input", "editing"
-        return False, err or ("step:" + stopped), "none"   # 編集ボタンが押せなかった（何も開いていない）
+        # 編集ボタンが押せなかった（何も開いていない）。見つからなかった（読み込みの遅れ等）は時間切れとして自動やり直しに回す（黒ヤギ 2回目 指摘1）
+        return False, ("timeout" if getattr(_TLS, "edit_button_missing", False) else (err or "step:" + stopped)), "none"
     if not result.get("success"):
         return False, err or ("opened_then_fail" if opened else "unknown"), ("editing" if opened else "none")
     return True, ("" if err == "no_karte_id" else err), "saved"   # カルテ番号は送られてきたもの（リンクが取れなくてもよい）
 
 
+EDIT_REASON = {   # ①の DX の文だけで使う言葉（FIELD_REASON は FAX・問い合わせの現場の文にも使うので足さない）
+    "timeout": "画面の読み込みが時間内に終わりませんでした（編集ボタンが見つからない等・何も書いていません）",
+}
+
+
 def _edit_notify_dx(data: dict, order_id: str, homis_id: str, kid: str, err: str, left: str, extra: str = "") -> None:
-    why = FIELD_REASON.get(err, err or "理由不明")
+    why = EDIT_REASON.get(err) or FIELD_REASON.get(err, err or "理由不明")
     text = (f"HOMIS ライター（GCP）: 音声カルテ（先生のカルテ）を書けませんでした（{why}）。"
             + ("そのカルテが編集中のまま残っています。HOMIS で開いて確かめてください。" if left == "editing" else "")
+            # 黒ヤギ実装2回目 指摘2: 保存の直後に先生が開いても状態 1・70 で not_interrupted になる（実際は書けていることがある）
+            + ("（書いた直後に先生がカルテを開いた場合も、この知らせになります。HOMIS で S が今回送った内容になっていれば書けています。）" if err == "verify:not_interrupted" else "")
             + extra
             + f"\n送った人 {data.get('senderEmail') or '－'}"
             + f"\n{_patient_url(homis_id, str(data.get('karteUrl') or '')) if kid else _patient_url(homis_id, '')}\norderId={order_id}")

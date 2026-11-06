@@ -317,6 +317,47 @@ class KarteEdit(unittest.TestCase):
         self.assertEqual((out["success"], out["left_in_homis"]), (False, "editing"))
         self.assertEqual((sent, self.homis.saves), ([], []))
 
+    def test_e9_edit_button_not_found_is_not_opened(self):
+        """編集ボタンが見つからない（読み込みの遅れ等）ときは押していない＝ none（黒ヤギ 3.13.0 実装2回目 指摘1）"""
+        from selenium.common.exceptions import TimeoutException
+        keep = server.BrowserActions._find_element
+
+        def slow(self_, selector, *a, **k):
+            if selector == "#karteEdit":
+                raise TimeoutException("not found")
+            return keep(self_, selector, *a, **k)
+        server.BrowserActions._find_element = slow
+        os.environ["RETRY_MODE"] = "on"
+        sent = []
+        keep_enq = auto_retry.enqueue
+        auto_retry.enqueue = lambda tpl, payload, delay: sent.append(payload["orderId"]) or "queued"
+        try:
+            out = self.write()
+        finally:
+            server.BrowserActions._find_element = keep
+            auto_retry.enqueue = keep_enq
+        self.assertEqual((out["success"], out["left_in_homis"], out["error_type"]), (False, "none", "timeout"))
+        self.assertEqual((self.homis.edits, self.homis.saves), (0, []))
+        self.assertEqual(sent, ["KE-18000001-20261106160000-A1"])   # 時間切れとして自動やり直しに回る
+        self.assertNotIn("編集中のまま残っています", self.homis.dx[0])
+
+    def test_v2_not_interrupted_note_in_dx(self):
+        """中断になっていない失敗の DX の知らせに「書いた直後に先生が開いた場合も」の一言（黒ヤギ 3.13.0 実装2回目 指摘2）"""
+        keep = server.verify_karte
+        server.verify_karte = types.SimpleNamespace(verify=lambda *a, **k: {
+            "verdict": "ok_processed", "status": "1", "status_label": "診察中", "reads": 2,
+            "s_len": 3, "o_len": 0, "reason": ""})
+        try:
+            out = self.write()
+        finally:
+            server.verify_karte = keep
+        self.assertEqual(out["error_type"], "verify:not_interrupted")
+        self.assertIn("書いた直後に先生がカルテを開いた場合も", self.homis.dx[0])
+        self.homis.reset()
+        self.reads = [karte(status="7")]
+        self.write()
+        self.assertNotIn("書いた直後に先生がカルテを開いた場合も", self.homis.dx[0])   # ほかの失敗には付けない
+
     def test_c1_fill_rules(self):
         f = server.edit_fill({"soap_s": "S", "soap_o": "x" * 70000, "soap_ap_summary": " ", "soap_ap_temporary": None,
                               "instruction": ""})
