@@ -94,12 +94,12 @@ function showAlive(s) {
   const ageMin = last ? (Date.parse(s.now) - Date.parse(last)) / 60000 : null;
   const stuck = s.queue_ok && waiting > 0 && (ageMin == null || ageMin > 15);
   const parts = [];
-  parts.push(`<span class="chipx ${stuck ? "bad" : ""}">🤖 ライター: ${last ? "最後に書き終えたのは " + hm(last) : "今日はまだ書いていません"}${stuck ? "（列に待ちがあるのに進んでいません）" : ""}</span>`);
+  parts.push(`<span class="chipx ${stuck ? "bad" : ""}">🤖 ライター: ${last ? "最後の書込 " + hm(last) : "今日はまだ書込なし"}${stuck ? "（書込待機があるのに進んでいません）" : ""}</span>`);
   if (s.queue_ok) {
     const name = { "homis-fax-writer": "FAX", "homis-bot-writer": "問い合わせ・疑義照会" };
-    for (const k of Object.keys(name)) parts.push(`<span class="chipx">列で待ち ${name[k]} ${q[k] || 0}件</span>`);
+    for (const k of Object.keys(name)) parts.push(`<span class="chipx">書込待機 ${name[k]} ${q[k] || 0}件</span>`);
   } else {
-    parts.push(`<span class="chipx">列の待ちは読めませんでした</span>`);
+    parts.push(`<span class="chipx">書込待機の件数は読めませんでした</span>`);
   }
   $("alive").innerHTML = parts.join("");
 }
@@ -142,7 +142,7 @@ function render() {
 
   const alertBox = $("alertBox");
   alertBox.classList.toggle("on", ng.length > 0);
-  alertBox.innerHTML = ng.length ? `<span class="big">🚨</span><div><b>書けなかったものが ${ng.length} 件あります。</b><br><span class="why">いちばん新しいもの：${esc(hm(ng[0].received_at))}　${esc(SRC[ng[0].route] || "")}　${esc(ng[0].view === "stale" ? "途中で止まった見込み" : reason(ng[0].error_type))}</span></div><button class="go" id="onlyFail" type="button">書けなかったものだけ見る</button>` : "";
+  alertBox.innerHTML = ng.length ? `<span class="big">🚨</span><div><b>書込失敗が ${ng.length} 件あります。</b><br><span class="why">いちばん新しいもの：${esc(hm(ng[0].received_at))}　${esc(SRC[ng[0].route] || "")}　${esc(ng[0].view === "stale" ? "停止の疑い" : reason(ng[0].error_type))}</span></div><button class="go" id="onlyFail" type="button">書込失敗だけ見る</button>` : "";
 
   const errs = [...new Set(rows.map((r) => r.error_type).filter(Boolean))].sort();
   $("err_type").innerHTML = `<option value="">エラーの種類：すべて</option>` + errs.map((e) => `<option value="${esc(e)}" ${st.err === e ? "selected" : ""}>${esc(reason(e).slice(0, 26))}</option>`).join("");
@@ -162,14 +162,14 @@ function render() {
 }
 
 function badge(r) {
-  return { ok: `<span class="badge ok">✅ 書けた</span>`, fail: `<span class="badge fail">⚠️ 書けなかった</span>`, stale: `<span class="badge stale">⚠ 止まっているかも</span>`,
-    waiting: `<span class="badge waiting">⏳ 列で待っています</span>`, running: `<span class="badge running">⏳ 書いている途中</span>`, done: `<span class="badge done">☑ 対応済み</span>` }[r.view] || "";
+  return { ok: `<span class="badge ok">✅ 書込成功</span>`, fail: `<span class="badge fail">⚠️ 書込失敗</span>`, stale: `<span class="badge stale">⚠ 停止の疑い</span>`,
+    waiting: `<span class="badge waiting">⏳ 書込待機中</span>`, running: `<span class="badge running">✍️ 書込中</span>`, done: `<span class="badge done">☑ 対応済み</span>` }[r.view] || "";
 }
 
 function whyText(r) {
   if (r.view === "fail") return `<span class="why ng">${esc(reason(r.error_type))}</span>`;
-  if (r.view === "stale") return `<span class="why ng">途中のまま 15 分を過ぎ、列にもありません</span>`;
-  if (r.view === "waiting") return `<span class="why">列で順番を待っています</span>`;
+  if (r.view === "stale") return `<span class="why ng">書込中のまま 15 分を過ぎ、書込待機にもありません</span>`;
+  if (r.view === "waiting") return `<span class="why">書込の順番を待っています</span>`;
   if (r.view === "running") return `<span class="why">${r.status === "received" ? "受け口が受けました" : "ライターが HOMIS に書いています"}</span>`;
   if (r.view === "ok") return `<span class="why">読み直しまで一致</span>`;
   return "";
@@ -179,7 +179,7 @@ function actionHTML(r, i) {
   const url = safeURL(r.karte_url);
   if (r.view === "ok" && url) return `<a class="open" href="${esc(url)}" target="_blank" rel="noopener noreferrer" data-stop="1">カルテを開く ↗</a>`;
   if (isFail(r)) return `<button class="chk" type="button" data-open="${i}">🔍 次にすること</button>`;
-  if (isRun(r)) return `<span class="wait">${r.view === "waiting" ? "待っています" : "書いている途中"}</span>`;
+  if (isRun(r)) return `<span class="wait">${r.view === "waiting" ? "書込待機中" : "書込中"}</span>`;
   return "";
 }
 
@@ -211,8 +211,8 @@ async function openDrawer(i) {
       <dt>書類種</dt><dd>${esc(r.doc_type || "－")}</dd>
       <dt>${r.route === "fax" ? "差出元" : "送った人"}</dt><dd>${esc((r.route === "fax" ? r.source : r.sender) || "－")}</dd>
       <dt>注文番号</dt><dd class="oid">${esc(r.order_id)}</dd>
-      <dt>理由</dt><dd>${esc(r.view === "stale" ? "途中で止まった見込み" : reason(r.error_type) || "なし")}</dd>
-      <dt>カルテ</dt><dd>${url ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">HOMIS で開く ↗</a>` : "（書けていません）"}</dd>
+      <dt>理由</dt><dd>${esc(r.view === "stale" ? "停止の疑い（途中で止まった見込み）" : reason(r.error_type) || "なし")}</dd>
+      <dt>カルテ</dt><dd>${url ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">HOMIS で開く ↗</a>` : "（書込できていません）"}</dd>
     </dl>
     ${nx ? `<div class="next ng"><b>🧭 次にすること</b>${esc(nx[0])}<br>${esc(nx[1])}</div>` : ""}
     <div id="detail"><p class="why">送られた中身を読み込み中…</p></div>`;
