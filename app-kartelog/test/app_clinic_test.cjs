@@ -1,4 +1,4 @@
-// 実行リスト 0.3.2〜0.3.5 クリニックで絞った数字と版の試験（偽の画面部品で public/app.js を動かす。node だけで動く）
+// 実行リスト 0.3.2〜0.3.6 クリニックで絞った数字・版・自動の読み直しの試験（偽の画面部品で public/app.js を動かす。node だけで動く）
 // 使い方: node app-kartelog/test/app_clinic_test.cjs [app.js のパス]（省略時は ../public/app.js）
 const fs = require("fs");
 const vm = require("vm");
@@ -10,11 +10,12 @@ const el = (id) => els[id] || (els[id] = {
   setAttribute() {}, appendChild() {}, addEventListener() {},
 });
 const robot = el("robot");
+const timers = [], vis = [];   // 0.3.6: 自動の読み直しのタイマーと「画面に戻った」の受け手
 const clicks = [];   // 0.3.4: 画面のクリックの受け手（document の click）を拾って、ボタンを押したことにする
 const press = (id) => clicks.forEach((fn) => fn({ target: { closest: () => ({ id, dataset: {} }) } }));
 const ctx = {
-  document: { getElementById: el, querySelector: () => robot, querySelectorAll: () => [], addEventListener(type, fn) { if (type === "click") clicks.push(fn); }, createElement: () => ({ style: {} }), hidden: false },
-  navigator: {}, setInterval() {}, console,
+  document: { getElementById: el, querySelector: () => robot, querySelectorAll: () => [], addEventListener(type, fn) { if (type === "click") clicks.push(fn); if (type === "visibilitychange") vis.push(fn); }, createElement: () => ({ style: {} }), hidden: false },
+  navigator: {}, setInterval(fn, ms) { timers.push([fn, ms]); }, console, Date,
   fetch: async () => ({ ok: true, json: async () => ({}) }),
 };
 vm.createContext(ctx);
@@ -98,5 +99,27 @@ if (!process.argv[2]) {
   eq("版が読めないときは画面の版だけ", el("ver").textContent, "版 " + goV);
 }
 
-console.log(bad ?`FAIL ${bad}` : "ALL OK");
-process.exit(bad ? 1 : 0);
+// 0.3.6: 自動の読み直し（start() の await のあとで登録されるので、少し待ってから見る）
+setTimeout(() => {
+  if (typeof ctx.maybeLoad !== "function") { eq("自動の読み直しの関数がある", false, true); }
+  else {
+    eq("10 秒ごとに見る", timers.length === 1 && timers[0][1] === 10000, true);
+    eq("画面に戻ったときの受け手", vis.length, 1);
+    const drawer = el("drawer"), d = ctx.document;
+    d.hidden = false; drawer.classList.toggle("on", false); st.loading = false;
+    st.loadedAt = Date.now() - 61000;
+    eq("60 秒たてば読む", ctx.maybeLoad(60000), true);
+    st.loading = false; st.loadedAt = Date.now() - 20000;
+    eq("60 秒たっていなければ読まない", ctx.maybeLoad(60000), false);
+    st.loadedAt = Date.now() - 61000; drawer.classList.toggle("on", true);
+    eq("窓を開いているあいだは読まない", ctx.maybeLoad(60000), false);
+    drawer.classList.toggle("on", false); d.hidden = true;
+    eq("画面が裏のあいだは読まない", ctx.maybeLoad(60000), false);
+    d.hidden = false; st.loading = true;
+    eq("読み込み中は重ねない", ctx.maybeLoad(60000), false);
+    st.loading = false; st.loadedAt = Date.now() - 31000;
+    eq("画面に戻ったとき 30 秒たっていれば読む", ctx.maybeLoad(30000), true);
+  }
+  console.log(bad ?`FAIL ${bad}` : "ALL OK");
+  process.exit(bad ? 1 : 0);
+}, 50);

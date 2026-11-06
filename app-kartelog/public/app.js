@@ -1,4 +1,5 @@
-// カルテライター 実行リスト 0.3.5（読むだけ・第1段）
+// カルテライター 実行リスト 0.3.6（読むだけ・第1段）
+// 0.3.6 (2026-11-06) 自動の読み直しを、画面に戻ったとき・窓を閉じたあとにもすぐ効くように（10 秒ごとに「60 秒たったか」を見る）
 // 0.3.5 (2026-11-06) 見出しの横に版を出す。箱の版とずれていたら F5 を案内（岩城さん「画面にバージョンもだして」）
 // 0.3.4 (2026-11-06) 院の名前が空の行も「院の分からない」に入れる・「すべてのクリニックで見る」は院の失敗があっても出し、押すとエラーの種類・検索語も外す（黒ヤギ2回目）
 // 0.3.3 (2026-11-06) 院を選んでいるとき、院の分からない行の件数を棒グラフの下に出し、その中の書込失敗は赤い知らせで知らせる（黒ヤギ指摘1）
@@ -7,7 +8,7 @@
 "use strict";
 
 const API = "/kartelog/api/";
-const APP_VERSION = "0.3.5";   // main.go の version と同じにする（試験 test/app_clinic_test.cjs で照らす）
+const APP_VERSION = "0.3.6";   // main.go の version と同じにする（試験 test/app_clinic_test.cjs で照らす）
 const TABS = [
   ["all", "🗂️ 全記録", "all"], ["fax", "📠 OhiScanGo（FAX/SCAN）", "fax"], ["bot", "💬 問い合わせ（コール受付分）", "bot"], ["bot_g", "💊 疑義照会（Tukusiフォームから）", "gi"],
 ];
@@ -73,7 +74,16 @@ function shift(day, n) {
   return t.toISOString().slice(0, 10);
 }
 
+// 0.3.6: 見えていて・窓が閉じていて・読み込み中でなく・前に読んでから minAge ミリ秒たっていれば読む
+function maybeLoad(minAge) {
+  if (document.hidden || $("drawer").classList.contains("on") || st.loading) return false;
+  if (Date.now() - (st.loadedAt || 0) < minAge) return false;
+  load();
+  return true;
+}
+
 async function load() {
+  st.loading = true;
   $("upd").textContent = "読み込み中…";
   const from = st.from || todayStr();
   const days = st.d === 7 ? 7 : 1;
@@ -94,6 +104,7 @@ async function load() {
     $("err").textContent = "読み込めませんでした（" + e.message + "）。少しして「読み直す」を押してください。";
     $("upd").textContent = "読み込めませんでした";
   }
+  st.loading = false; st.loadedAt = Date.now();   // 0.3.6: 読めなかったときも 60 秒あけて次を試す（続けて叩かない）
   render();
 }
 
@@ -353,6 +364,10 @@ document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeDrawe
   try { st.me = await getJSON("me"); } catch (e) { st.me = {}; }
   showVersion(st.me.version);
   await load();
-  setInterval(() => { if (!document.hidden && !$("drawer").classList.contains("on")) load(); }, 60000);
+  // 0.3.6: 前は 60 秒ごとに「見えていて窓が閉じていれば」読んでいたので、画面を裏にしていた・窓を開いていたあとは
+  //        次の 60 秒まで古い時刻のままだった（岩城さん「読みなおすをおさないと更新時間が更新されない」）。
+  //        10 秒ごとに「前に読んでから 60 秒たったか」を見る・画面に戻ったら 30 秒たっていればすぐ読む
+  setInterval(() => maybeLoad(60000), 10000);
+  document.addEventListener("visibilitychange", () => maybeLoad(30000));
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("/kartelog/sw.js", { scope: "/kartelog/" }).catch(() => {});
 })();
