@@ -2,9 +2,13 @@
 """Cloud Run 受け口（フェーズ2a＋失敗ガード）
 
 ==============================================================================
-バージョン: 3.10.0
-最終更新: 2026/11/05
+バージョン: 3.11.0
+最終更新: 2026/11/06
 改定履歴（新しい順・全体は docs/SPEC_v3_cloud.md 0章「モジュール別の版」）:
+  v3.11.0 11/06 実行リストの記録（run_record.py 1.0.0・置き場 RECORD_BUCKET・空なら何もしない）。札を取る前に accepted、
+               終わったら ok／fail・error_type・カルテの URL・left_in_homis（HOMIS に残したもの none／editing／saved／unknown）を足す。
+               left_in_homis は再書き込みのボタンを出すかの判定に使う（仕様 docs/SPEC_実行リスト_v0.md v0.4 7章）。
+               書き込みの手順・知らせ・結果シートは変えない。記録の失敗は書き込みを止めない（1 回 5 秒まで・失敗後 60 秒は書かない）
   v3.10.0 11/05 FAX（fax_so）の O が HOMIS の O 欄の上限（UTF-8 で 65,535 バイト）を超えるときは、行の区切りで 64,000 バイト以内に区切り、
                末尾に「以下省略」の一言を添えて書く（DX担当「2 にしましょう」）。数えるときは改行を LF の1バイト、' を保存後の ’ の3バイトとする。
                読み直しは区切った文と比べる。書けたら DX にだけ知らせる（現場には出さない）。11/4 札 -75 は 45,704 字で後ろ約 1,240 字が黙って捨てられていた
@@ -95,6 +99,7 @@ from selenium.webdriver.chrome.service import Service
 
 import navi_callback
 import patient_lock
+import run_record
 import verify_karte
 from browser_actions import BrowserActions
 from result_sheet import claim, enabled as sheet_enabled
@@ -590,7 +595,7 @@ def _write_karte_inner(data: dict, order_id: str, homis_id: str) -> dict:
             claimed = claim(order_id, str(data.get("groupId") or ""))
         except Exception:
             logger.exception("結果シート受付失敗 orderId=%s", order_id)
-            return {
+            res = {
                 "orderId": order_id,
                 "success": False,
                 "has_karte_id": False,
@@ -599,7 +604,11 @@ def _write_karte_inner(data: dict, order_id: str, homis_id: str) -> dict:
                 "total_sec": 0,
                 "karte_id": "",
                 "karte_url": "",
+                "left_in_homis": "none",   # v3.11.0
             }
+            # v3.11.0: 実行リストは触らない（同じ注文の2回目なら、前の結果を上書きしてしまうため）。
+            # 受け口の received のまま残り、画面は「止まっているかも」（再書き込みは出さない）になる
+            return res
         if not claimed.get("created") and claimed.get("status") != "accepted":
             logger.info("同じorderIdのため書かない orderId=%s status=%s", order_id, claimed.get("status"))
             return result_from_row(claimed, order_id)
@@ -607,16 +616,74 @@ def _write_karte_inner(data: dict, order_id: str, homis_id: str) -> dict:
             logger.info("受付済み未完了のため書かない orderId=%s", order_id)
             return result_from_row(claimed, order_id)
         sheet_row = int(claimed.get("row") or 0)
+    _record_accepted(data, order_id, homis_id)   # v3.11.0: 実行リスト（置き場が無ければ何もしない）
     # v3.9.0: 患者さんごとの札（別の台が同じ患者さんを同時に書かない）。取れなければ書かずに知らせる（案A）
     lock = patient_lock.acquire(homis_id, order_id)
     if lock["status"] != "ok":
-        return _locked_out(data, order_id, homis_id, t0, sheet_row, lock)
+        res = _locked_out(data, order_id, homis_id, t0, sheet_row, lock)
+        _record_finished(data, order_id, res)
+        return res
     _TLS.lock = (homis_id, lock["generation"])
     _TLS.keep_lock = False
     try:
-        return _write_locked(data, order_id, homis_id, t0, time.time(), sheet_row, lock)
+        res = _write_locked(data, order_id, homis_id, t0, time.time(), sheet_row, lock)
     finally:
         _release_lock(order_id)
+    _record_finished(data, order_id, res)
+    return res
+
+
+# v3.11.0: 実行リストの記録で、ライターが受け口の記録に足す欄（payload は受け口が入れる。無いときだけライターが入れる）
+def _record_accepted(data: dict, order_id: str, homis_id: str) -> None:
+    def change(rec: dict) -> None:
+        rec.setdefault("order_id", order_id)
+        rec.setdefault("route", run_record.route_of(order_id))
+        rec.setdefault("received_at", run_record.now_iso())
+        rec.setdefault("payload", {k: v for k, v in data.items() if k != "recordDay"})
+        rec.setdefault("patient", {"homis_id": homis_id})
+        rec["template"] = _template_name(data)
+        rec["status"] = "accepted"
+        rec["accepted_at"] = run_record.now_iso()
+        run_record.add_timeline(rec, "ライターが受け取った")
+    word = run_record.update(data.get("recordDay"), order_id, change)
+    if word not in ("off", "updated", "created"):
+        logger.warning("実行リストの記録（受け取り）を書けなかった orderId=%s %s", order_id, word)
+
+
+def _record_finished(data: dict, order_id: str, res: dict) -> None:
+    def change(rec: dict) -> None:
+        rec.setdefault("order_id", order_id)
+        rec.setdefault("route", run_record.route_of(order_id))
+        rec["status"] = "ok" if res.get("success") else "fail"
+        rec["error_type"] = str(res.get("error_type") or "")
+        rec["karte_id"] = str(res.get("karte_id") or "")
+        rec["karte_url"] = str(res.get("karte_url") or "")
+        rec["left_in_homis"] = str(res.get("left_in_homis") or "unknown")
+        rec["total_sec"] = res.get("total_sec")
+        rec["finished_at"] = run_record.now_iso()
+        run_record.add_timeline(rec, "書けた" if res.get("success") else "書けなかった")
+    word = run_record.update(data.get("recordDay"), order_id, change)
+    if word not in ("off", "updated", "created"):
+        logger.warning("実行リストの記録（結果）を書けなかった orderId=%s %s", order_id, word)
+
+
+def left_in_homis(success: bool, blocked: str, stopped: str, left_editing: str, opened: bool, err: str,
+                  opened_before: bool = False) -> str:
+    """v3.11.0: HOMIS に何を残して終わったか（再書き込みの判定・仕様 7章・黒ヤギ仕様2回目 指摘1）。
+    saved＝保存した・したかもしれない（成功・no_karte_id・読み直しの不一致）／
+    editing＝ライターの書きかけ（編集中）が残る（stopped・1回目の書きかけのあと止まった・前の書きかけが戻った）／
+    none＝新規を開いていない／unknown＝新規は開いたが、保存を押したかが分からない（安全側でボタンを出さない）。
+    opened_before＝この注文のどこかの回でカルテを開いた（order_kids）。開いた回があれば none とは言わない
+    （黒ヤギ 実行リスト実装1回目 指摘1: 1回目が開いて失敗→2回目が新規で止められた筋。今のやり直しの条件では起きないが守っておく）"""
+    if success or err == "no_karte_id" or err.startswith("verify:"):
+        return "saved"
+    if stopped or blocked == "reused_editing" or (blocked and left_editing):
+        return "editing"
+    if opened_before:
+        return "unknown"
+    if blocked or not opened:
+        return "none"
+    return "unknown"
 
 
 def _locked_out(data: dict, order_id: str, homis_id: str, t0: float, sheet_row: int, lock: dict) -> dict:
@@ -654,6 +721,7 @@ def _locked_out(data: dict, order_id: str, homis_id: str, t0: float, sheet_row: 
         "retried": "",
         "retried_blocked": "",
         "lock_waited_sec": lock.get("waited_sec", 0),
+        "left_in_homis": "none",   # v3.11.0: 札が取れず、HOMIS は開いていない
     }
 
 
@@ -845,6 +913,9 @@ def _write_locked(data: dict, order_id: str, homis_id: str, t0: float, t_write: 
         "retried": left_editing,   # v3.6.0: 1回目に止めた手順の名前（やり直さなかったら空）
         "retried_blocked": blocked_retry,   # v3.8.0: 入力途中のカルテで止められて、あけてやり直したら "in_progress_karte"
         "lock_waited_sec": lock.get("waited_sec", 0),   # v3.9.0: 札を待った秒
+        # v3.11.0: HOMIS に残したもの（実行リストの再書き込みの判定）
+        "left_in_homis": left_in_homis(bool(result.get("success")), blocked, stopped, left_editing, opened, err,
+                                       bool(getattr(_TLS, "order_kids", []) or [])),
     }
 
 

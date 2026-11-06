@@ -3,5 +3,5 @@
 # 標準部品だけなので pip install は無い
 FROM python:3.12-slim
 ENV PYTHONUNBUFFERED=1
-COPY server.py /app/server.py
+COPY server.py run_record.py /app/
 CMD ["python", "-u", "/app/server.py"]

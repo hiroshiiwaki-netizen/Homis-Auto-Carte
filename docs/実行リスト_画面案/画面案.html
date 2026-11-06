@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>カルテライター 実行リスト（画面案）</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=BIZ+UDPGothic:wght@400;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#f4f7fb; --card:#fff; --ink:#1f2a37; --sub:#5b6b7f; --line:#e3e9f1;
+  --ok:#12a37a; --okbg:#e3f7ef; --ng:#e0464e; --ngbg:#fde8e9; --run:#e79a12; --runbg:#fff3dc;
+  --c1:#2563eb; --c2:#0ea5a4; --fax:#2563eb; --bot:#7c3aed; --gi:#db2777; --kj:#0d9488;
+}
+*{box-sizing:border-box}
+body{margin:0;font-family:"BIZ UDPGothic","BIZ UDPゴシック",sans-serif;color:var(--ink);background:var(--bg);font-size:15px}
+body::before{content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;
+  background:radial-gradient(600px 300px at 90% 10%,rgba(37,99,235,.10),transparent 70%),
+             radial-gradient(500px 300px at 5% 80%,rgba(14,165,164,.10),transparent 70%)}
+.mock{background:#fff7d6;color:#7a5a00;text-align:center;font-size:13px;padding:6px}
+header{background:linear-gradient(120deg,#1d4ed8 0%,#0ea5a4 100%);color:#fff;padding:22px 28px 70px;position:relative;overflow:hidden}
+header h1{margin:0;font-size:26px;letter-spacing:.04em}
+header p{margin:6px 0 0;opacity:.9;font-size:14px}
+.hd-right{position:absolute;right:28px;top:22px;display:flex;gap:10px;align-items:center}
+.pill{background:rgba(255,255,255,.18);border:1px solid rgba(255,255,255,.35);color:#fff;border-radius:999px;padding:7px 14px;font-size:13px}
+button.pill{cursor:pointer;font-family:inherit;font-weight:700}
+.robot{position:absolute;right:300px;top:-4px;transform:scale(.8);opacity:.95}
+.wrap{position:relative;z-index:1;max-width:1180px;margin:-52px auto 40px;padding:0 20px}
+.tabs{display:flex;gap:8px;background:var(--card);padding:8px;border-radius:20px;box-shadow:0 8px 24px rgba(15,40,80,.08);flex-wrap:wrap}
+.tab{flex:1;min-width:150px;border:0;background:transparent;border-radius:14px;padding:12px 10px;font-family:inherit;font-size:15px;font-weight:700;color:var(--sub);cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px}
+.tab .n{background:var(--line);color:var(--sub);border-radius:999px;padding:2px 9px;font-size:12px}
+.tab.on{background:linear-gradient(120deg,#eef4ff,#e6fbfa);color:var(--ink);box-shadow:inset 0 0 0 2px #c7d8fb}
+.tab.on .n{background:var(--c1);color:#fff}
+.tab.off{opacity:.45;cursor:default}
+.dot{width:10px;height:10px;border-radius:50%}
+.kpis{align-items:start;display:grid;grid-template-columns:1.3fr 1fr 1fr 1fr;gap:16px;margin:18px 0}
+.kpi{background:var(--card);border-radius:24px;padding:18px 20px;box-shadow:0 8px 24px rgba(15,40,80,.06);position:relative}
+.kpi .lb{color:var(--sub);font-size:13px}
+.kpi .v{font-size:34px;font-weight:700;margin-top:4px}
+.kpi .s{font-size:12px;color:var(--sub);margin-top:2px}
+.kpi.ok .v{color:var(--ok)} .kpi.ng .v{color:var(--ng)} .kpi.run .v{color:var(--run)}
+.rate{display:flex;align-items:center;gap:16px}
+.bars{display:flex;align-items:flex-end;gap:3px;height:46px;margin-top:10px}
+.bars i{flex:1;background:linear-gradient(#93c5fd,#2563eb);border-radius:3px 3px 0 0;min-height:2px}
+.bars i.f{background:linear-gradient(#fca5a5,#e0464e)}
+.alert{display:flex;gap:14px;align-items:center;background:var(--ngbg);border:1px solid #f7c3c6;border-radius:20px;padding:14px 18px;margin-bottom:16px}
+.alert b{color:var(--ng)}
+.alert .go{margin-left:auto;background:var(--ng);color:#fff;border:0;border-radius:12px;padding:9px 16px;font-family:inherit;font-weight:700;cursor:pointer}
+.filters{background:var(--card);border-radius:20px;padding:14px 16px;display:flex;gap:10px;flex-wrap:wrap;align-items:center;box-shadow:0 8px 24px rgba(15,40,80,.05)}
+.chip{border:1.5px solid var(--line);background:#fff;border-radius:999px;padding:7px 14px;font-family:inherit;font-size:14px;cursor:pointer;color:var(--sub)}
+.chip.on{border-color:var(--c1);color:var(--c1);background:#eef4ff;font-weight:700}
+.sep{width:1px;height:26px;background:var(--line);margin:0 4px}
+select,input[type=search],input[type=date]{font-family:inherit;font-size:14px;border:1.5px solid var(--line);border-radius:12px;padding:8px 12px;background:#fff;color:var(--ink)}
+input[type=search]{min-width:300px;margin-left:auto}
+.list{margin-top:16px;display:flex;flex-direction:column;gap:10px}
+.day{color:var(--sub);font-size:13px;font-weight:700;margin:10px 4px 0}
+.row{background:var(--card);border-radius:18px;padding:14px 18px;display:grid;grid-template-columns:70px 150px 1.3fr 1.1fr auto;gap:14px;align-items:center;box-shadow:0 4px 14px rgba(15,40,80,.05);cursor:pointer;border:1.5px solid transparent;transition:transform .12s}
+.row:hover{transform:translateY(-2px);box-shadow:0 10px 24px rgba(15,40,80,.10)}
+.row.ok{background:#f1fbf6;border-color:#cdeedd} .row.ng{background:#fff1f2;border-color:#f7c6ca} .row.run{background:#fff8e8;border-color:#f6dfa9} .row.done{background:#f3f5f8;border-color:#dfe5ee}
+.tm{font-size:20px;font-weight:700}
+.badge{white-space:nowrap;display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:5px 12px;font-size:13px;font-weight:700}
+.badge.ok{background:var(--okbg);color:var(--ok)} .badge.ng{background:var(--ngbg);color:var(--ng)} .badge.run{background:var(--runbg);color:var(--run)}
+.src{font-size:12px;font-weight:700;border-radius:8px;padding:3px 8px;color:#fff;margin-right:8px}
+.who b{font-size:16px}.dt{margin-left:10px;font-size:13px;background:#eef2f7;border-radius:8px;padding:2px 8px;color:#334155}.sd{font-size:12px;color:var(--sub)}
+.oid{font-family:Consolas,monospace;font-size:13px;color:var(--sub)}
+.why{font-size:13px;color:var(--sub)}
+.why.ng{color:var(--ng)}
+.open{background:linear-gradient(120deg,#2563eb,#0ea5a4);color:#fff;border:0;border-radius:12px;padding:9px 14px;font-family:inherit;font-weight:700;cursor:pointer;white-space:nowrap}
+.rw{background:linear-gradient(120deg,#e0464e,#f97316);color:#fff;border:0;border-radius:12px;padding:9px 14px;font-family:inherit;font-weight:700;cursor:pointer;white-space:nowrap}
+.chk{background:#fff;color:var(--ng);border:1.5px solid #f7c6ca;border-radius:12px;padding:8px 13px;font-family:inherit;font-weight:700;cursor:pointer;white-space:nowrap}
+.hand{background:#fff;color:var(--sub);border:1.5px solid var(--line);border-radius:12px;padding:9px 14px;font-family:inherit;font-weight:700;cursor:pointer}
+.acts{display:flex;gap:8px;margin-top:14px;flex-wrap:wrap}
+.badge.done{background:#e8edf3;color:#5b6b7f}
+.open:disabled{background:var(--line);color:var(--sub);cursor:default}
+.drawer{position:fixed;top:0;right:-460px;width:440px;max-width:100%;height:100%;background:#fff;box-shadow:-20px 0 40px rgba(15,40,80,.18);transition:right .25s;z-index:10;padding:26px;overflow:auto}
+.drawer.on{right:0}
+.drawer h2{margin:0 0 4px;font-size:20px}
+.dl{display:grid;grid-template-columns:110px 1fr;gap:10px 12px;margin-top:18px;font-size:14px}
+.dl dt{color:var(--sub)}
+.next{margin-top:20px;background:#f0f6ff;border-radius:18px;padding:16px}
+.next b{display:block;margin-bottom:6px}
+.close{position:absolute;right:18px;top:18px;border:0;background:var(--line);border-radius:50%;width:34px;height:34px;font-size:18px;cursor:pointer}
+.shade{position:fixed;inset:0;background:rgba(15,30,60,.25);display:none;z-index:9}.shade.on{display:block}
+@media (max-width:860px){.kpis{grid-template-columns:1fr 1fr}.row{grid-template-columns:60px 1fr;}.row>:nth-child(n+3){grid-column:1/-1}.robot{display:none}}
+</style>
+</head>
+<body>
+<div class="mock">画面案です（架空のデータ）。本物はライターの結果シートを読みます。</div>
+<header>
+  <h1>カルテライター 実行リスト</h1>
+  <p>FAX・問い合わせ・疑義照会のカルテを、ちゃんと書けたかひと目で</p>
+  <svg class="robot" width="120" height="110" viewBox="0 0 120 110" aria-hidden="true">
+    <rect x="22" y="30" width="62" height="50" rx="16" fill="#fff" opacity=".95"/>
+    <circle cx="42" cy="54" r="6" fill="#1d4ed8"/><circle cx="64" cy="54" r="6" fill="#1d4ed8"/>
+    <path d="M44 68 q9 7 18 0" stroke="#0ea5a4" stroke-width="4" fill="none" stroke-linecap="round"/>
+    <line x1="53" y1="30" x2="53" y2="16" stroke="#fff" stroke-width="4"/><circle cx="53" cy="13" r="6" fill="#fde047"/>
+    <rect x="80" y="62" width="30" height="40" rx="5" fill="#fff" opacity=".9" transform="rotate(10 95 82)"/>
+    <path d="M86 74h16M86 82h16M86 90h10" stroke="#93c5fd" stroke-width="3" transform="rotate(10 95 82)"/>
+    <path d="M10 92 l14 -14" stroke="#fde047" stroke-width="6" stroke-linecap="round"/>
+  </svg>
+  <div class="hd-right"><span class="pill" id="upd">更新 07:58</span><button class="pill" onclick="render()">↻ 読み直す</button></div>
+</header>
+
+<div class="wrap">
+  <div class="tabs" id="tabs"></div>
+
+  <div class="kpis">
+    <div class="kpi"><div class="lb">今日の件数</div><div class="rate"><div class="v" id="kAll">0</div>
+      <svg width="64" height="64" viewBox="0 0 36 36"><circle cx="18" cy="18" r="15" fill="none" stroke="#e3e9f1" stroke-width="5"/>
+      <circle id="ring" cx="18" cy="18" r="15" fill="none" stroke="#12a37a" stroke-width="5" stroke-linecap="round" stroke-dasharray="0 100" transform="rotate(-90 18 18)"/>
+      <text id="ringT" x="18" y="21" text-anchor="middle" font-size="6.5" font-weight="700" fill="#12a37a"></text></svg></div>
+      <div class="bars" id="bars" title="時間ごとの件数（赤は失敗）"></div><div class="s">8時〜19時の時間ごと</div></div>
+    <div class="kpi ok"><div class="lb">✅ 書けた</div><div class="v" id="kOk">0</div><div class="s">読み直しまで一致</div></div>
+    <div class="kpi ng"><div class="lb">⚠️ 書けなかった</div><div class="v" id="kNg">0</div><div class="s">手で書く・確かめるもの</div></div>
+    <div class="kpi run"><div class="lb">⏳ 書いている途中</div><div class="v" id="kRun">0</div><div class="s">1件 50秒ほど</div></div>
+  </div>
+
+  <div class="alert" id="alertBox"></div>
+
+  <div class="filters">
+    <button class="chip on" data-d="0">今日</button><button class="chip" data-d="1">昨日</button><button class="chip" data-d="7">7日</button>
+    <input type="date" value="2026-11-06" title="日を選ぶ">
+    <span class="sep"></span>
+    <button class="chip on" data-s="all">すべて</button><button class="chip" data-s="ng">書けなかった</button><button class="chip" data-s="ok">書けた</button><button class="chip" data-s="run">途中</button>
+    <select id="err"><option value="">エラーの種類：すべて</option></select>
+    <input type="search" id="q" placeholder="🔍 患者さんの名前・注文番号でさがす">
+  </div>
+
+  <div class="list" id="list"></div>
+</div>
+
+<div class="shade" id="shade" onclick="closeD()"></div>
+<aside class="drawer" id="drawer"><button class="close" onclick="closeD()">×</button><div id="dbody"></div></aside>
+
+<script>
+const SRC={FAX:{n:"OhiScanGo",c:"var(--fax)",i:"📠"},BOT:{n:"問い合わせ",c:"var(--bot)",i:"💬"},GI:{n:"疑義照会",c:"var(--gi)",i:"💊"}};
+const WHY={
+ "blocked:in_progress_karte":["その患者さんに入力途中のカルテがあり、新規が開けませんでした","入力途中のカルテを閉じてから「再書き込み」を押してください。",1],
+ "verify:o_mismatch":["O が送った文と違います","カルテは保存されています。開いて O 欄を確かめ、足りなければ手で足してください（再書き込みすると2枚になります）。",0],
+ "locked:busy":["同じ患者さんを別の仕事が書いていて、時間内に順番が回ってきませんでした","カルテは書かれていません。「再書き込み」を押してください。",1],
+ "no_karte_id":["カルテ番号が取れませんでした（保存できていない見込み）","HOMIS にカルテが残っていないか先に確かめてください。無ければ再書き込みできます。",2]
+};
+// 架空のデータ
+const rows=[];let seed=7;const rnd=()=>(seed=(seed*9301+49297)%233280)/233280;
+for(let h=8;h<=19;h++){const n=Math.floor(rnd()*9)+(h<17?3:1);for(let k=0;k<n;k++){
+  const m=Math.floor(rnd()*60);const r=rnd();const src=r<.68?"FAX":r<.93?"BOT":"GI";
+  let st="ok",e="";const f=rnd();if(f<.035){st="ng";e=Object.keys(WHY)[Math.floor(rnd()*4)]}
+  const NM=["見本 花子","見本 太郎","試験 一郎","例 さくら","見本 次郎","例 みどり"],DT=["訪問看護報告書","診療情報提供書","検査結果","処方箋","指示書の返信"],SD=["〇〇訪問看護ステーション","〇〇病院 地域連携室","〇〇薬局","〇〇クリニック"],ST=["事務 Aさん","看護師 Bさん","医師 Cさん"];
+  const nm=NM[Math.floor(rnd()*NM.length)]+" 様",dt=src==="FAX"?DT[Math.floor(rnd()*DT.length)]:src==="BOT"?"問い合わせ":"疑義照会",sd=src==="FAX"?SD[Math.floor(rnd()*SD.length)]:ST[Math.floor(rnd()*ST.length)];
+  rows.push({nm,dt,sd,t:`${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}`,h,src,st,e,
+    id:src==="FAX"?`FAX-2611060${h}${String(m).padStart(2,"0")}00-${k+1}`:src==="BOT"?`BOT-20261106-0${String(40+h*3+k).padStart(3,"0")}-2026110${6}${h}${m}`:`BOT-G-202611060${h}${m}00`});}}
+rows.sort((a,b)=>b.t.localeCompare(a.t));rows[0].st="run";rows[0].e="";
+let tab="ALL",fs="all";
+function tabsHtml(){const c=s=>rows.filter(r=>s==="ALL"||r.src===s).length;
+ const t=[["ALL","🗂️ 全記録","#64748b"],["FAX","📠 OhiScanGo","var(--fax)"],["BOT","💬 問い合わせ","var(--bot)"],["GI","💊 疑義照会","var(--gi)"]];
+ document.getElementById("tabs").innerHTML=t.map(([k,l,c2])=>`<button class="tab ${tab===k?"on":""}" onclick="tab='${k}';render()"><span class="dot" style="background:${c2}"></span>${l}<span class="n">${c(k)}</span></button>`).join("")
+ +`<button class="tab off" title="共通 JSON の入口ができたら"><span class="dot" style="background:var(--kj)"></span>🎙️ 音声カルテ<span class="n">準備中</span></button>`;}
+function render(){
+ tabsHtml();const q=document.getElementById("q").value.trim();const ev=document.getElementById("err").value;
+ const base=rows.filter(r=>tab==="ALL"||r.src===tab);
+ const ok=base.filter(r=>r.st==="ok").length,ng=base.filter(r=>r.st==="ng"),run=base.filter(r=>r.st==="run").length;
+ kAll.textContent=base.length;kOk.textContent=ok;kNg.textContent=ng.length;kRun.textContent=run;
+ const pct=base.length?Math.round(ok/(base.length-run||1)*1000)/10:0;ring.setAttribute("stroke-dasharray",`${pct*0.942} 100`);ringT.textContent=pct+"%";
+ let bh="";for(let h=8;h<=19;h++){const a=base.filter(r=>r.h===h);const f=a.some(r=>r.st==="ng");bh+=`<i class="${f?"f":""}" style="height:${Math.max(4,a.length*4.5)}px" title="${h}時 ${a.length}件"></i>`}bars.innerHTML=bh;
+ alertBox.style.display=ng.length?"flex":"none";
+ alertBox.innerHTML=`<span style="font-size:26px">🚨</span><div><b>書けなかったものが ${ng.length} 件あります。</b><br><span class="why">いちばん新しいもの：${ng[0]?ng[0].t+"　"+SRC[ng[0].src].n+"　"+WHY[ng[0].e][0]:""}</span></div><button class="go" onclick="setS('ng')">書けなかったものだけ見る</button>`;
+ const list=base.filter(r=>(fs==="all"||r.st===fs)&&(!ev||r.e===ev)&&(!q||r.id.includes(q)||r.nm.includes(q)));
+ document.getElementById("list").innerHTML=`<div class="day">11月6日（金）　${list.length} 件</div>`+list.map((r,i)=>{
+   const s=SRC[r.src];const b=r.st==="ok"?`<span class="badge ok">✅ 書けた</span>`:r.st==="ng"?`<span class="badge ng">⚠️ 書けなかった</span>`:(r.st==="done"?`<span class="badge done">☑ 対応済み</span>`:`<span class="badge run">⏳ 書いている途中</span>`);
+   const why=r.st==="ng"?`<span class="why ng">${WHY[r.e][0]}</span>`:r.st==="run"?`<span class="why">ライターが HOMIS に書いています</span>`:r.st==="done"?`<span class="why">${WHY[r.e][0]}</span>`:`<span class="why">読み直しまで一致</span>`;
+   return `<div class="row ${r.st}" onclick="openD(${rows.indexOf(r)})"><div class="tm">${r.t}</div><div>${b}</div><div><div class="who"><b>${r.nm}</b><span class="dt">${r.dt}</span></div><div style="margin-top:4px"><span class="src" style="background:${s.c}">${s.i} ${s.n}</span><span class="sd">${r.src==="FAX"?"差出元":"送った人"}：${r.sd}</span></div></div><div>${why}</div>${act(r)}</div>`}).join("");
+}
+function act(r){const i=rows.indexOf(r);if(r.st==="ok")return `<button class="open" onclick="event.stopPropagation()">カルテを開く ↗</button>`;
+ if(r.st==="run")return `<button class="open" disabled>書いている途中</button>`;if(r.st==="done")return `<button class="open" disabled>${r.doneBy}</button>`;
+ const w=WHY[r.e];return w[2]===1?`<button class="rw" onclick="event.stopPropagation();rewrite(${i})">↻ 再書き込み</button>`:`<button class="chk" onclick="event.stopPropagation();openD(${i})">🔍 先に確かめる</button>`}
+function rewrite(i){const r=rows[i];if(!confirm(`${r.id} をもう一度書きます。\n同じ患者さんのカルテが HOMIS に無いことを確かめましたか？`))return;
+ r.st="done";r.doneBy="↻ 再書き込みへ（-R1）";rows.unshift({nm:r.nm,dt:r.dt,sd:r.sd,t:"07:58",h:19,src:r.src,st:"run",e:"",id:r.id+"-R1"});closeD();render()}
+function handDone(i){const r=rows[i];r.st="done";r.doneBy="✍️ 手で書いた";closeD();render()}
+function setS(s){fs=s;document.querySelectorAll("[data-s]").forEach(b=>b.classList.toggle("on",b.dataset.s===s));render()}
+document.querySelectorAll("[data-s]").forEach(b=>b.onclick=()=>setS(b.dataset.s));
+document.querySelectorAll("[data-d]").forEach(b=>b.onclick=()=>{document.querySelectorAll("[data-d]").forEach(x=>x.classList.remove("on"));b.classList.add("on")});
+err.innerHTML+=Object.entries(WHY).map(([k,v])=>`<option value="${k}">${v[0].slice(0,22)}…</option>`).join("");
+err.onchange=render;q.oninput=render;
+function openD(i){const r=rows[i],s=SRC[r.src];const w=WHY[r.e];
+ dbody.innerHTML=`<h2>${s.i} ${s.n}　${r.t}</h2><div>${r.st==="ok"?'<span class="badge ok">✅ 書けた</span>':r.st==="ng"?'<span class="badge ng">⚠️ 書けなかった</span>':'<span class="badge run">⏳ 書いている途中</span>'}</div>
+ <dl class="dl"><dt>患者さん</dt><dd><b>${r.nm}</b></dd><dt>書類種</dt><dd>${r.dt}</dd><dt>${r.src==="FAX"?"差出元":"送った人"}</dt><dd>${r.sd}</dd><dt>注文番号</dt><dd class="oid">${r.id}</dd><dt>受付</dt><dd>11月6日 ${r.t}</dd><dt>状態</dt><dd>${r.st}</dd><dt>エラーの種類</dt><dd>${r.e||"なし"}</dd><dt>カルテ</dt><dd>${r.st==="ok"?'<a href="#">HOMIS で開く ↗</a>':"（書けていません）"}</dd></dl>
+ ${w&&r.st==="ng"?`<div class="next"><b>🧭 次にすること</b>${w[1]}<div class="why" style="margin-top:8px">理由：${w[0]}</div></div><div class="acts">${w[2]?`<button class="rw" onclick="rewrite(${i})">↻ 再書き込み${w[2]===2?'（確かめてから）':''}</button>`:''}<button class="hand" onclick="handDone(${i})">✍️ 手で書いた（対応済みにする）</button></div><div class="why" style="margin-top:10px">押した人と時刻は記録に残ります。</div>`:""}`;
+ drawer.classList.add("on");shade.classList.add("on")}
+function closeD(){drawer.classList.remove("on");shade.classList.remove("on")}
+render();
+</script>
+</body>
+</html>

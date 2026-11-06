@@ -2,9 +2,13 @@
 """FAX カルテの受け口（横付けで受け取るだけ・段1）
 
 ==============================================================================
-バージョン: 0.5.2
-最終更新: 2026/11/05
+バージョン: 0.6.0
+最終更新: 2026/11/06
 改定履歴（新しい順・全体は docs/SPEC_v3_cloud.md 0章「モジュール別の版」）:
+  v0.6.0 11/06 実行リストの記録（run_record.py 1.0.0・置き場 RECORD_BUCKET・空なら何もしない）。本番の FAX と問い合わせ（live・test）で、
+               列に入れる前に received（無いときだけ作る＝ライターの記録を上書きしない）、落としたら rejected と理由を残す
+               （黒ヤギ 実行リスト仕様1回目 指摘1: 受け口で落ちたものが一覧から消えないように）。ライターへの仕事に recordDay（記録の日付）を足す。
+               中身（S・O）は記録にだけ入れ、ログには出さない。記録の通信は 1 回 3 秒まで・失敗しても Tukusi への返事は今まで通り
   v0.5.2 11/05 知らせの先頭に出どころを付ける（DX担当「エラーが流れてくるときにわかるように」）。FAX は【FAX・SCAN（OhiScanGo）】、
                問い合わせは【問い合わせ（OhisamaBot）】、疑義照会（id=G・注文番号 BOT-G-…）は【疑義照会】で文も「疑義照会のカルテを…」
   v0.5.1 11/05 列に入れるとき、時間切れ・通信の失敗（HTTP の返事が無い）なら、すぐに1回だけやり直す（17:49 札 -48 が
@@ -77,7 +81,11 @@ import unicodedata
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "0.5.2"
+import run_record
+
+VERSION = "0.6.0"
+# v0.6.0: 受け口では記録の通信を 3 秒まで（受け口の上限 30 秒・列 5 秒×2・知らせ 3 秒×2 の中に収める）
+run_record.TIMEOUT_SEC = 3.0
 MAX_BODY = 256 * 1024          # 受け取る本文の上限（バイト）
 READ_TIMEOUT = 10.0            # 1回の読み込みを待つ上限（秒）。少しずつ送る相手で箱がふさがらないように
 LABEL_MAX = 40                 # source・doc_type・route を記録する最大の長さ
@@ -124,7 +132,8 @@ def build_mirror_task(ticket: str, s: str, o: str) -> dict:
 TASK_DISPATCH_DEADLINE = "900s"
 
 
-def _build_task(queue: str, order_id: str, homis_id: str, patient_name: str, s: str, o, template: str = "fax_so") -> dict:
+def _build_task(queue: str, order_id: str, homis_id: str, patient_name: str, s: str, o, template: str = "fax_so",
+                record_day: str = "") -> dict:
     """ライターあての仕事（OIDC＋X-Writer-Key・既定の型紙 fax_so）。試し書きと本番で同じ形。
     v0.4.0: 問い合わせは template=bot_s_interrupt・O なし（o=None なら oContent を入れない）
     v0.5.0: dispatchDeadline は task の直下に文字列で（httpRequest の中に入れると API が 400 で弾く・黒ヤギ仕様2回目 指摘2）"""
@@ -138,6 +147,8 @@ def _build_task(queue: str, order_id: str, homis_id: str, patient_name: str, s: 
     }
     if o is not None:
         payload["oContent"] = o
+    if record_day:
+        payload["recordDay"] = record_day   # v0.6.0: 実行リストの記録の日付（ライターが同じ JSON に足す）
     return {"task": {
         "name": queue + "/tasks/" + order_id,
         "dispatchDeadline": TASK_DISPATCH_DEADLINE,
@@ -272,8 +283,49 @@ def notify_live_failure(ticket: str, reason: str) -> None:
             log_line({"event": "fax_live_notify_failed", "to": name, "ticket": ticket, "severity": "WARNING"})
 
 
-def enqueue_live(ticket: str, homis_raw, s, o, patient_raw=None) -> str:
-    """本物の患者さんあての仕事を列に入れる。返り値は記録用の短い言葉。入れられなかったときは知らせる"""
+# ---------- v0.6.0: 実行リストの記録（受けた received・落とした rejected） ----------
+_DONE_STATES = ("accepted", "running", "ok", "fail", "done")
+
+
+def _fallback_order(prefix: str) -> str:
+    """番号が作れなかったとき（札・問い合わせ番号が無い）の記録の名前。一覧に「受け口で落とした」を出すため"""
+    return f"{prefix}-NOID-{datetime.now(run_record.JST).strftime('%H%M%S')}-{os.urandom(2).hex()}"
+
+
+def record_received(day: str, order_id: str, payload: dict, meta: dict) -> str:
+    """列に入れる前に、無いときだけ作る（ライターが先に書いた記録・同じ注文の2回目を上書きしない）"""
+    rec = {"order_id": order_id, "route": run_record.route_of(order_id), "status": "received",
+           "received_at": run_record.now_iso(), "payload": payload,
+           "patient": {"homis_id": str(payload.get("homisId") or "")}, **meta}
+    run_record.add_timeline(rec, "受け口が受けた")
+    return run_record.create(day, order_id, rec)
+
+
+def record_rejected(day: str, order_id: str, reason: str, payload: dict, meta: dict, homis_id: str = "") -> str:
+    """受け口で落としたことを残す。ライターがもう受け取った（同じ注文の2回目など）なら、状態は変えずに一言だけ足す"""
+    def change(rec: dict) -> None:
+        if rec.get("status") in _DONE_STATES:
+            run_record.add_timeline(rec, "同じ注文がもう一度届き、受け口で落とした（" + reason + "）")
+            return
+        rec.setdefault("order_id", order_id)
+        rec.setdefault("route", run_record.route_of(order_id))
+        rec.setdefault("received_at", run_record.now_iso())
+        rec.setdefault("payload", payload)
+        rec.setdefault("patient", {"homis_id": homis_id})
+        for k, v in meta.items():
+            rec.setdefault(k, v)
+        rec["status"] = "rejected"
+        rec["error_type"] = reason
+        rec["left_in_homis"] = "none"   # 受け口は HOMIS を開かない
+        run_record.add_timeline(rec, "受け口で落とした（" + reason + "）")
+    return run_record.update(day, order_id, change)
+
+
+def enqueue_live(ticket: str, homis_raw, s, o, patient_raw=None, meta: dict | None = None) -> str:
+    """本物の患者さんあての仕事を列に入れる。返り値は記録用の短い言葉。入れられなかったときは知らせる
+    v0.6.0: meta（doc_type・source・fax_route）は実行リストの記録にだけ使う"""
+    meta = dict(meta or {})
+    day = run_record.today()
     reason = ""
     homis_id = extract_homis_id(homis_raw)
     check = patient_check(homis_raw, patient_raw)
@@ -292,11 +344,18 @@ def enqueue_live(ticket: str, homis_raw, s, o, patient_raw=None) -> str:
         reason = "no_config"
     if reason:
         notify_live_failure(ticket, reason)
+        raw = {"sContent": s if isinstance(s, str) else "", "oContent": o if isinstance(o, str) else ""}
+        record_rejected(day, "FAX-" + ticket if ticket else _fallback_order("FAX"), "skip:" + reason, raw, meta, homis_id)
         return "skip:" + reason
     s = s if isinstance(s, str) else ""
-    word = _post_task(live_queue(), _build_task(live_queue(), "FAX-" + ticket, homis_id, "", s, o))
+    task = _build_task(live_queue(), "FAX-" + ticket, homis_id, "", s, o, record_day=day if run_record.enabled() else "")
+    payload = json.loads(base64.b64decode(task["task"]["httpRequest"]["body"]).decode("utf-8"))
+    payload.pop("recordDay", None)
+    record_received(day, "FAX-" + ticket, payload, meta)
+    word = _post_task(live_queue(), task)
     if word.startswith("error"):
         notify_live_failure(ticket, word)
+        record_rejected(day, "FAX-" + ticket, word, payload, meta, homis_id)
     return word
 
 
@@ -382,8 +441,15 @@ def enqueue_bot(body: dict) -> tuple[str, str, str]:
         reason = "id_missing" if check == "missing" else "id_mismatch"
     if not reason and not all(os.environ.get(k, "").strip() for k in ("WRITER_URL", "LIVE_QUEUE", "TASKS_INVOKER_SA", "WRITER_KEY")):
         reason = "no_config"
+    day = run_record.today()   # v0.6.0: 実行リストの記録
+    gi = order_id.startswith("BOT-G-") or unicodedata.normalize("NFKC", str(body.get("id") or "")).strip().upper() == "G"
+    meta = {"doc_type": "疑義照会" if gi else "問い合わせ"}
     if reason:
         notify_bot_failure(order_id or ("問い合わせ番号 " + str(body.get("id") or "")[:20]), reason)
+        rec_id = order_id or _fallback_order("BOT-G" if gi else "BOT")
+        if mode == "test":
+            rec_id = rec_id.replace("BOT-", "BOT-TEST-", 1)
+        record_rejected(day, rec_id, "skip:" + reason, {"sContent": s if isinstance(s, str) else ""}, meta, homis_id)
         return "skip:" + reason, order_id, check
     if mode == "test":
         test_id = os.environ.get("MIRROR_HOMIS_ID", "2277808").strip()
@@ -391,10 +457,14 @@ def enqueue_bot(body: dict) -> tuple[str, str, str]:
             return "skip:not_test_patient", order_id, check
         order_id, homis_id, s = order_id.replace("BOT-", "BOT-TEST-", 1), test_id, BOT_TEST_MARK + s
     queue = bot_queue()   # v0.5.0: 問い合わせの列（BOT_QUEUE が空なら LIVE_QUEUE）
-    task = _build_task(queue, order_id, homis_id, "", s, None, template="bot_s_interrupt")
+    task = _build_task(queue, order_id, homis_id, "", s, None, template="bot_s_interrupt",
+                       record_day=day if run_record.enabled() else "")
+    payload = {"orderId": order_id, "homisId": homis_id, "patientName": "", "template": "bot_s_interrupt", "sContent": s}
+    record_received(day, order_id, payload, meta)
     word = _post_task(queue, task)
     if word.startswith("error"):
         notify_bot_failure(order_id, word)
+        record_rejected(day, order_id, word, payload, meta, homis_id)
     return word, order_id, check
 
 
@@ -672,7 +742,9 @@ class Handler(BaseHTTPRequestHandler):
         record["mirror"] = enqueue_mirror(record.get("ticket", ""), body.get("s"), body.get("o"))
         if mode == "live":
             record["live"] = enqueue_live(record.get("ticket", ""), body.get("homis_id"), body.get("s"), body.get("o"),
-                                          body.get("homis_patient"))
+                                          body.get("homis_patient"),
+                                          {"doc_type": record.get("doc_type", ""), "source": record.get("source", ""),
+                                           "fax_route": record.get("route", "")})   # route は記録の「道」（fax）と別
         del body, raw   # 本文はここで捨てる
         record["elapsed_ms"] = int((time.time() - t0) * 1000)
         log_line(record)

@@ -1,0 +1,10 @@
+{
+  "name": "カルテライター 実行リスト",
+  "short_name": "実行リスト",
+  "start_url": "/kartelog/",
+  "scope": "/kartelog/",
+  "display": "standalone",
+  "background_color": "#f4f7fb",
+  "theme_color": "#1d4ed8",
+  "icons": [{ "src": "/kartelog/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}

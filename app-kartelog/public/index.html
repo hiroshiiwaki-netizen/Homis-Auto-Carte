@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<meta name="theme-color" content="#1d4ed8">
+<title>カルテライター 実行リスト</title>
+<link rel="manifest" href="/kartelog/manifest.webmanifest">
+<link rel="icon" href="/kartelog/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=BIZ+UDPGothic:wght@400;700&display=swap">
+<link rel="stylesheet" href="/kartelog/style.css">
+</head>
+<body>
+<header>
+  <h1>カルテライター 実行リスト</h1>
+  <p>FAX・問い合わせ・疑義照会のカルテを、ちゃんと書けたかひと目で</p>
+  <svg class="robot" width="120" height="110" viewBox="0 0 120 110" aria-hidden="true">
+    <rect x="22" y="30" width="62" height="50" rx="16" fill="#fff" opacity=".95"/>
+    <circle cx="42" cy="54" r="6" fill="#1d4ed8"/><circle cx="64" cy="54" r="6" fill="#1d4ed8"/>
+    <path d="M44 68 q9 7 18 0" stroke="#0ea5a4" stroke-width="4" fill="none" stroke-linecap="round"/>
+    <line x1="53" y1="30" x2="53" y2="16" stroke="#fff" stroke-width="4"/><circle cx="53" cy="13" r="6" fill="#fde047"/>
+    <rect x="80" y="62" width="30" height="40" rx="5" fill="#fff" opacity=".9" transform="rotate(10 95 82)"/>
+    <path d="M86 74h16M86 82h16M86 90h10" stroke="#93c5fd" stroke-width="3" transform="rotate(10 95 82)"/>
+    <path d="M10 92 l14 -14" stroke="#fde047" stroke-width="6" stroke-linecap="round"/>
+  </svg>
+  <div class="hd-right"><span class="pill" id="upd">読み込み中…</span><button class="pill" id="reload" type="button">↻ 読み直す</button></div>
+</header>
+
+<div class="wrap">
+  <div class="tabs" id="tabs"></div>
+
+  <div class="alive" id="alive"></div>
+  <div class="err" id="err"></div>
+
+  <div class="kpis">
+    <div class="kpi"><div class="lb" id="kLabel">今日の件数</div><div class="rate"><div class="v" id="kAll">0</div>
+      <svg width="64" height="64" viewBox="0 0 36 36" aria-hidden="true"><circle cx="18" cy="18" r="15" fill="none" stroke="#e3e9f1" stroke-width="5"/>
+      <circle id="ring" cx="18" cy="18" r="15" fill="none" stroke="#12a37a" stroke-width="5" stroke-linecap="round" stroke-dasharray="0 100" transform="rotate(-90 18 18)"/>
+      <text id="ringT" x="18" y="21" text-anchor="middle" font-size="6.5" font-weight="700" fill="#12a37a"></text></svg></div>
+      <div class="bars" id="bars" title="時間ごとの件数（赤は書けなかったものがある時間）"></div><div class="s" id="barsLabel">8時〜19時の時間ごと</div></div>
+    <div class="kpi ok"><div class="lb">✅ 書けた</div><div class="v" id="kOk">0</div><div class="s">読み直しまで一致</div></div>
+    <div class="kpi ng"><div class="lb">⚠️ 書けなかった</div><div class="v" id="kNg">0</div><div class="s">手で書く・確かめるもの</div></div>
+    <div class="kpi run"><div class="lb">⏳ 途中・待ち</div><div class="v" id="kRun">0</div><div class="s">1件 50秒ほど</div></div>
+  </div>
+
+  <div class="alert" id="alertBox"></div>
+
+  <div class="filters">
+    <button class="chip on" data-d="0" type="button">今日</button><button class="chip" data-d="1" type="button">昨日</button><button class="chip" data-d="7" type="button">7日</button>
+    <input type="date" id="day" title="日を選ぶ">
+    <span class="sep"></span>
+    <button class="chip on" data-s="all" type="button">すべて</button><button class="chip" data-s="fail" type="button">書けなかった</button><button class="chip" data-s="ok" type="button">書けた</button><button class="chip" data-s="run" type="button">途中・待ち</button>
+    <select id="err_type"><option value="">エラーの種類：すべて</option></select>
+    <button class="chip hidden" id="tests" type="button">🧪 試験も出す</button>
+    <input type="search" id="q" placeholder="🔍 注文番号・患者番号・書類種でさがす">
+  </div>
+
+  <div class="list" id="list"></div>
+</div>
+
+<div class="shade" id="shade"></div>
+<aside class="drawer" id="drawer" aria-live="polite"><button class="close" id="close" type="button" aria-label="閉じる">×</button><div id="dbody"></div></aside>
+
+<script src="/kartelog/app.js"></script>
+</body>
+</html>
