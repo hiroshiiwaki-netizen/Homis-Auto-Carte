@@ -2,9 +2,13 @@
 """書いたカルテを読み直して確かめる（読むだけ）
 
 ==============================================================================
-バージョン: 1.2.0
-最終更新: 2026/11/05
+バージョン: 1.3.0
+最終更新: 2026/11/06
 改定履歴（全体は docs/SPEC_v3_cloud.md 0章「モジュール別の版」）:
+  v1.3.0 11/06 問い合わせ（expect="interrupt"）で、読み直したときにもう「完了」（3・5・6・7）になっていて、最後の更新者がライター以外・S が送ったとおりなら、
+               書いた直後に人（HIO）が処理したとみて ok_processed（書込成功）。11/6 13:49 問い合わせ 0026 で、中断で保存した 10 秒後に
+               状態 7（ORCA登録不要）になり not_interrupted の空振りが出た（岩城さん「書いた瞬間に HIO さんが処理するときもある」）。
+               更新者がライター自身なら今まで通り not_interrupted（ライターが完了にしてしまった本当の失敗）。S が違えば今まで通り失敗側
   v1.2.0 11/05 HOMIS は保存のとき半角の ' を ’ (U+2019) に置き換える（テスト舞子で 44 種の記号を書いて確認・変わるのはこの1字だけ）。
                比べる前に両方の ' を ’ にそろえる。11/4 の札 -71・11/5 の札 -39 の o_mismatch はこれで、中身は送ったとおりだった
   v1.1.0 11/02 問い合わせ（bot_s_interrupt）用に expect="interrupt" を足す。合格は「中断（状態2）・最後の更新者がライター自身
@@ -29,6 +33,7 @@
   not_completed  完了になっていない（編集中・中断・取消）
   not_interrupted （問い合わせ）中断になっていない
   not_mine       （問い合わせ）最後の更新者がライター自身ではない（ほかの人のカルテを読んでいる見込み）
+  ok_processed   （問い合わせ）書いた直後に人が処理して完了にした（更新者がライター以外・S 一致）。書込成功（v1.3.0）
   s_mismatch     S が違う
   o_mismatch     O が違う
   unverified     読めなかった（ログイン・通信・形が違う）。書けなかったとは限らない
@@ -123,7 +128,10 @@ def verify(homis_id: str, karte_id: str, s_expect: str, o_expect: str, expect: s
     out.update(status=str(karte.get("status")), s_len=len(s_got), o_len=len(o_got))
     out["status_label"] = STATUS_LABEL.get(out["status"], "状態" + out["status"])
     updater = str((karte.get("upd_user") or {}).get("full_name") or "") if isinstance(karte.get("upd_user"), dict) else ""
-    if out["status"] not in target:
+    if (expect == "interrupt" and out["status"] in DONE_STATUS and updater
+            and _clean_name(updater) != _expected_updater() and s_got == _norm(s_expect)):
+        out["verdict"] = "ok_processed"   # v1.3.0: 書いた直後に人（HIO）が処理して完了にした（名前は記録に出さない）
+    elif out["status"] not in target:
         out["verdict"] = "not_interrupted" if expect == "interrupt" else "not_completed"
     elif expect == "interrupt" and _clean_name(updater) != _expected_updater():
         out["verdict"] = "not_mine"   # 名前は記録に出さない（職員さんの名前のことがある）

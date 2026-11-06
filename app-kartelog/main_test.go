@@ -135,6 +135,14 @@ func TestClassify(t *testing.T) {
 		{Record{OrderID: "FAX-X", Status: "received", ReceivedAt: recent}, true, "running", "none"},
 		{Record{OrderID: "FAX-X", Status: "received", ReceivedAt: old}, false, "running", "none"}, // 列が読めないときは 60 分まで待つ
 		{Record{OrderID: "FAX-X", Status: "received", ReceivedAt: "2026-11-06T08:30:00+09:00"}, false, "stale", "check"},
+		// 0.3.0: 自動やり直し
+		{Record{Status: "handed_over"}, true, "handed", "none"},
+		{Record{Status: "fail", ErrorType: "skipped:new_karte_found", LeftInHomis: "none"}, true, "human", "none"},
+		{Record{Status: "fail", ErrorType: "locked:busy", LeftInHomis: "none", Manual: true}, true, "fail", "manual"},
+		{Record{OrderID: "FAX-W", Status: "scheduled", RetryAt: "2026-11-06T10:05:00+09:00"}, true, "scheduled", "none"},
+		{Record{OrderID: "FAX-X-A1", Status: "scheduled", RetryAt: "2026-11-06T10:05:00+09:00"}, true, "scheduled", "none"},
+		{Record{OrderID: "FAX-X-A1", Status: "scheduled", RetryAt: "2026-11-06T09:30:00+09:00"}, true, "stale", "check"},
+		{Record{OrderID: "FAX-X-A1", Status: "scheduled", RetryAt: "2026-11-06T09:58:00+09:00"}, true, "running", "none"},
 	}
 	for i, c := range cases {
 		v, a := classify(c.r, q, c.queueOK, fixedNow)

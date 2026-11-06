@@ -27,12 +27,15 @@ const WHY = {
   "skip:bad_homis_id": "受け口: 患者番号が読めません", "skip:no_config": "受け口: 設定が足りません",
   "skip:id_mismatch": "受け口: 患者さんが食い違っています", "skip:id_missing": "受け口: 患者番号が届いていません",
   "skip:bad_id": "受け口: 問い合わせの番号がありません", "skip:bad_sent_at": "受け口: 送った時刻がありません",
+  "skipped:new_karte_found": "自動やり直しの前に、新しいカルテが見つかりました（人が書いた見込み）",
+  "skipped:karte_list_unreadable": "自動やり直しの前に、カルテ一覧を読めませんでした",
 };
 const NEXT = {
   rewrite: ["カルテは書かれていません。", "元の書類（FAX・問い合わせの画面）を見て、手で書いてください。画面から書き直すボタンは次の版で付きます。"],
   cancel_then_rewrite: ["HOMIS にライターの書きかけ（編集中）が 1 枚残っています。", "編集中のカルテを取り消してから、元の書類を見て手で書いてください。"],
   check: ["カルテが保存されているかもしれません。", "HOMIS でこの患者さんのカルテを開いて確かめ、足りなければ手で足してください（もう一度書くと 2 枚になります）。"],
   stale: ["ライターが途中で止まった見込みです。", "HOMIS でカルテを確かめ、無ければ手で書いてください。DX推進部にも知らせてください。"],
+  manual: ["自動で再書込をやり直しましたが、書けませんでした。", "元の書類（FAX・問い合わせの画面）を見て、手でカルテを書いてください。"],
 };
 
 const st = { tab: "all", d: 0, from: "", s: "all", q: "", err: "", clinic: "", tests: false, rows: [], me: {}, data: null };
@@ -43,7 +46,8 @@ const hm = (iso) => (iso || "").slice(11, 16);
 const md = (iso) => { const m = (iso || "").slice(5, 10).split("-"); return m.length === 2 ? `${+m[0]}月${+m[1]}日` : ""; };
 const reason = (e) => WHY[e] || (e ? (e.startsWith("error:") ? "受け口: 列に入れられませんでした（" + e + "）" : e) : "");
 const tabOf = (r) => (r.route === "fax" || r.route === "fax_mirror" ? "fax" : r.route === "bot_g" ? "bot_g" : r.route === "bot" || r.route === "bot_test" ? "bot" : "other");
-const isRun = (r) => r.view === "running" || r.view === "waiting";
+const isRun = (r) => r.view === "running" || r.view === "waiting" || r.view === "scheduled";
+const counted = (r) => r.view !== "handed";   // 0.3.0: 自動で再書込へ回した元の行は数えない（最後の結果だけ）
 const isFail = (r) => r.view === "fail" || r.view === "stale";
 const homisPatientURL = (id) => (/^[1-9][0-9]{0,9}$/.test(id || "") ? `https://homis.jp/homic/?pid=patient_detail&patient_id=${id}&p=5` : "");
 const safeURL = (u) => (/^https:\/\/homis\.jp\//.test(u || "") ? u : "");
@@ -119,9 +123,9 @@ function render() {
   const counts = { all: rows.length };
   for (const r of rows) counts[tabOf(r)] = (counts[tabOf(r)] || 0) + 1;
   $("tabs").innerHTML = TABS.map(([k, label, dot]) => `<button class="tab ${st.tab === k ? "on" : ""}" data-tab="${k}" type="button"><span class="dot ${dot}"></span>${label}<span class="n">${counts[k] || 0}</span></button>`).join("")
-    + `<button class="tab off" type="button" title="音声カルテ（準備中・共通 JSON の入口ができたら）"><span class="dot kj"></span>🎙️ 音声カルテ</button>`;
+    ;   // 音声カルテのタブは、共通 JSON の入口ができたら足す（0.3.0 で外した: 5 つ目で 2 行に折れるため）
 
-  const base = rows.filter((r) => st.tab === "all" || tabOf(r) === st.tab);
+  const base = rows.filter((r) => (st.tab === "all" || tabOf(r) === st.tab) && counted(r));
   const ok = base.filter((r) => r.view === "ok").length;
   const ng = base.filter(isFail);
   const run = base.filter(isRun).length;
@@ -172,7 +176,9 @@ function render() {
 
 function badge(r) {
   return { ok: `<span class="badge ok">✅ 書込成功</span>`, fail: `<span class="badge fail">⚠️ 書込失敗</span>`, stale: `<span class="badge stale">⚠ 停止の疑い</span>`,
-    waiting: `<span class="badge waiting">⏳ 書込待機中</span>`, running: `<span class="badge running">✍️ 書込中</span>`, done: `<span class="badge done">☑ 対応済み</span>` }[r.view] || "";
+    waiting: `<span class="badge waiting">⏳ 書込待機中</span>`, running: `<span class="badge running">✍️ 書込中</span>`, done: `<span class="badge done">☑ 対応済み</span>`,
+    handed: `<span class="badge handed">↻ 自動で再書込へ</span>`, human: `<span class="badge human">☑ 人が書いた見込み</span>`,
+    scheduled: `<span class="badge scheduled">⏳ 自動で再書込（${esc(hm(r.retry_at))} まで・あと ${Math.max(1, 4 - (r.attempt || 1))} 回）</span>` }[r.view] || "";
 }
 
 // 0.2.2: 番号の名前（岩城さん「注文番号って何？」）。FAX＝OhiScanGo の FAX受付番号、問い合わせ＝問い合わせ番号、疑義照会＝送信時刻
@@ -202,12 +208,22 @@ function tlText(what, r) {
   return what;
 }
 
+// 0.3.0: 書込後確認（ok＝○・unverified＝未確認（保存済み）・それ以外＝×）。記録に無ければ出さない
+function verifyText(v) {
+  if (!v) return "";
+  return "　・　書込後確認 " + (v === "ok" ? "○" : v === "ok_processed" ? "○（そのあと人が処理）" : v === "unverified" ? "未確認（カルテは保存済み）" : "×");
+}
+
 function whyText(r) {
+  if (r.view === "fail" && r.action === "manual") return `<span class="badge manual">✋ 手動でお願いします</span> <span class="why ng">${esc(reason(r.error_type))}</span>`;
   if (r.view === "fail") return `<span class="why ng">${esc(reason(r.error_type))}</span>`;
+  if (r.view === "handed") return `<span class="why">自動の再書込を予約しました（${esc((r.retried_as || "").slice(-2))}）</span>`;
+  if (r.view === "human") return `<span class="why">新しいカルテが見つかったので、自動の再書込を止めました（DX推進部が確かめます）</span>`;
+  if (r.view === "scheduled") return `<span class="why">${esc(hm(r.retry_at))} に自動で書き直します（手で書かずにお待ちください）</span>`;
   if (r.view === "stale") return `<span class="why ng">書込中のまま 15 分を過ぎ、書込待機にもありません</span>`;
   if (r.view === "waiting") return `<span class="why">書込の順番を待っています</span>`;
   if (r.view === "running") return `<span class="why">${r.status === "received" ? "受け口が受けました" : "ライターが HOMIS に書いています"}</span>`;
-  if (r.view === "ok") return `<span class="why">カルテ書込 ○${r.verify === "ok" ? "　・　書込後確認 ○" : ""}</span>`;
+  if (r.view === "ok") return `<span class="why">カルテ書込 ○${verifyText(r.verify)}</span>`;
   return "";
 }
 
@@ -262,8 +278,7 @@ async function openDrawer(i) {
   try {
     const d = await getJSON(`record?day=${encodeURIComponent(r.day)}&id=${encodeURIComponent(r.order_id)}`);
     const p = d.payload || {};
-    const tl = (d.timeline || []).map((t) => `<li>${esc(hm(t.at))}　${esc(tlText(t.what, r))}</li>`).join("")
-      + (d.verify ? `<li>${esc(hm(d.finished_at))}　書込後確認 ${d.verify === "ok" ? "○" : "×"}</li>` : "");
+    const tl = (d.timeline || []).map((t) => `<li>${esc(hm(t.at))}　${esc(tlText(t.what, r))}</li>`).join("");   // 書込後確認はライター 3.12.0 が時刻の流れに書く
     $("detail").innerHTML = `<h3>時刻の流れ</h3><ul class="tl">${tl || "<li>（記録なし）</li>"}</ul>
       <h3>送られた S</h3><div class="body">${esc(p.sContent || "（なし）")}</div>
       ${p.oContent != null ? `<h3>送られた O</h3><div class="body">${esc(p.oContent || "（なし）")}</div>` : ""}`;

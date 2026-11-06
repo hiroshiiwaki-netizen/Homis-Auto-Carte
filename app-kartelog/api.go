@@ -40,8 +40,29 @@ func classify(r Record, q QueueInfo, queueOK bool, now time.Time) (view, action 
 		return "ok", "open"
 	case "done":
 		return "done", "none"
+	case "handed_over": // 0.3.0: 自動で再書込へ回した元の行（件数に数えない）
+		return "handed", "none"
 	case "fail", "rejected":
+		if r.ErrorType == "skipped:new_karte_found" { // 人が書いた見込み。「手動で」と出さない・ボタンも出さない（仕様 7章の例外）
+			return "human", "none"
+		}
+		if r.Manual {
+			return "fail", "manual" // 自動の再書込はここまで。手動でお願いします
+		}
 		return "fail", nextAction(r)
+	case "scheduled": // 0.3.0: 自動の再書込を予約した行。予約の時刻を過ぎても列に無ければ止まっているかも
+		if queueOK && q.Names[r.OrderID] {
+			return "scheduled", "none"
+		}
+		if t, err := time.Parse(time.RFC3339, r.RetryAt); err == nil {
+			if now.Sub(t) > staleAfter {
+				return "stale", "check"
+			}
+			if !queueOK || now.Before(t) {
+				return "scheduled", "none"
+			}
+		}
+		return "running", "none"
 	}
 	// received・accepted・running（途中）
 	if queueOK && q.Names[r.OrderID] {

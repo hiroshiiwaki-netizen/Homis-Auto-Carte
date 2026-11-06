@@ -2,9 +2,14 @@
 """Cloud Run 受け口（フェーズ2a＋失敗ガード）
 
 ==============================================================================
-バージョン: 3.11.0
+バージョン: 3.12.0
 最終更新: 2026/11/06
 改定履歴（新しい順・全体は docs/SPEC_v3_cloud.md 0章「モジュール別の版」）:
+  v3.12.0 11/06 書込失敗の自動やり直し（auto_retry.py 1.0.0・RETRY_MODE=on のときだけ・仕様 docs/SPEC_実行リスト_v0.md v1.2 14章）。
+               HOMIS に何も残っていない失敗（locked・入力途中・知らせ・ログイン等）だけ、同じ列に -A1（5分後）・-A2（15分後）・-A3（30分後）を予約で入れる。
+               最初の失敗でカルテ一覧の一番大きい番号を控え（札を外す前）、やり直しの前に控えより新しいカルテがあれば書かずに止める（人が書いた見込み）。
+               現場への知らせ: 1回目は先頭に【手で書かずにお待ちください】と自動でやり直す旨／途中の失敗は DX だけ／3回ともだめ・入れられないときは「手で書いてください」。
+               成功は現場に知らせない（岩城さん）。実行リストの記録に handed_over・scheduled・manual・verify（書込後確認）を足す
   v3.11.0 11/06 実行リストの記録（run_record.py 1.0.0・置き場 RECORD_BUCKET・空なら何もしない）。札を取る前に accepted、
                終わったら ok／fail・error_type・カルテの URL・left_in_homis（HOMIS に残したもの none／editing／saved／unknown）を足す。
                left_in_homis は再書き込みのボタンを出すかの判定に使う（仕様 docs/SPEC_実行リスト_v0.md v0.4 7章）。
@@ -99,6 +104,7 @@ from selenium.webdriver.chrome.service import Service
 
 import navi_callback
 import patient_lock
+import auto_retry
 import run_record
 import verify_karte
 from browser_actions import BrowserActions
@@ -191,6 +197,9 @@ FIELD_REASON = {
     "blocked:reused_editing": "前に書けずに残った書きかけのカルテが新規で戻ってきたため、書かずに止めました",
     "locked:busy": "同じ患者さんのカルテを別の仕事が書いていて、順番を待ちましたが時間内に回ってきませんでした",
     "locked:error": "同時に書くのを防ぐ札の置き場が使えず、安全のため書きませんでした",
+    # v3.12.0: 自動やり直し
+    "skipped:new_karte_found": "自動やり直しの前に、新しいカルテが見つかりました（人が書いた見込み）",
+    "skipped:karte_list_unreadable": "自動やり直しの前に、カルテ一覧を読めませんでした",
 }
 
 
@@ -477,8 +486,15 @@ FIELD_HEAD_GIGI = ("疑義照会のカルテを書けませんでした（{why}�
                    "HOMIS でカルテを確かめ、無ければ疑義照会の内容から書いてください。")
 
 
-def _notify_field(order_id: str, page_url: str, err: str, template: str = "fax_so") -> None:
-    """本番の FAX・問い合わせが書けなかったことを現場用スペースに知らせる。例外は外に出さない（書いた結果は必ず返す）"""
+RETRY_FIRST_HEAD = "【手で書かずにお待ちください】\n"   # v3.12.0: 自動でやり直すときの先頭（黒ヤギ 自動やり直し仕様2回目の文の提案）
+RETRY_FIRST_NOTE = ("\nカルテ書込を自動でやり直します（最大 3 回・約 50 分以内）。結果は実行リストで見られます。"
+                    "最後まで書けなかったときだけ、改めて「手で書いてください」とお知らせします。")
+RETRY_FINAL_HEAD = "自動で {n} 回やり直しましたが書けませんでした。手で書いてください。\n"
+
+
+def _notify_field(order_id: str, page_url: str, err: str, template: str = "fax_so", prefix: str = "", note: str = "") -> None:
+    """本番の FAX・問い合わせが書けなかったことを現場用スペースに知らせる。例外は外に出さない（書いた結果は必ず返す）
+    v3.12.0: prefix（先頭）・note（理由のあと）を足せる（自動やり直しの案内）"""
     env_name, head = FIELD_TARGET.get(template, FIELD_TARGET["fax_so"])
     hook = os.environ.get(env_name, "").strip()
     if not hook:
@@ -487,7 +503,7 @@ def _notify_field(order_id: str, page_url: str, err: str, template: str = "fax_s
     why = FIELD_REASON.get(err, f"書き込みに失敗しました（{err or '理由不明'}）")
     if str(order_id).startswith("BOT-G-"):
         head = FIELD_HEAD_GIGI
-    text = navi_callback.with_label(head.format(why=why) + f"\n{page_url}\n注文番号 {order_id}", order_id)
+    text = navi_callback.with_label(prefix + head.format(why=why) + note + f"\n{page_url}\n注文番号 {order_id}", order_id)
     body = json.dumps({"text": text}, ensure_ascii=False).encode("utf-8")
     req = urllib.request.Request(hook, data=body, headers={"Content-Type": "application/json; charset=utf-8"}, method="POST")
     try:
@@ -617,20 +633,133 @@ def _write_karte_inner(data: dict, order_id: str, homis_id: str) -> dict:
             return result_from_row(claimed, order_id)
         sheet_row = int(claimed.get("row") or 0)
     _record_accepted(data, order_id, homis_id)   # v3.11.0: 実行リスト（置き場が無ければ何もしない）
+    if auto_retry.split_attempt(order_id)[1] >= 1:
+        # v3.12.0: 自動やり直し（-A1〜-A3）は書く前に、控えより新しいカルテが無いか見る（人が書いた見込み・仕様 14.2b）。
+        # RETRY_MODE を切ったあとに列に残っていた分も、安全のため同じように見る
+        stop, now_id = auto_retry.human_wrote(homis_id, data.get("baseline_karte_id"))
+        if stop:
+            res = _skipped_human(data, order_id, homis_id, t0, sheet_row, now_id)
+            _record_finished(data, order_id, res)
+            return res
     # v3.9.0: 患者さんごとの札（別の台が同じ患者さんを同時に書かない）。取れなければ書かずに知らせる（案A）
     lock = patient_lock.acquire(homis_id, order_id)
     if lock["status"] != "ok":
         res = _locked_out(data, order_id, homis_id, t0, sheet_row, lock)
+        _note_baseline(data, order_id, homis_id, res)
         _record_finished(data, order_id, res)
+        _schedule_retry(data, order_id, homis_id, res)
         return res
     _TLS.lock = (homis_id, lock["generation"])
     _TLS.keep_lock = False
     try:
         res = _write_locked(data, order_id, homis_id, t0, time.time(), sheet_row, lock)
+        _note_baseline(data, order_id, homis_id, res)   # v3.12.0: 控えは札を外す前に取る（黒ヤギ 仕様3回目 指摘3）
     finally:
         _release_lock(order_id)
     _record_finished(data, order_id, res)
+    _schedule_retry(data, order_id, homis_id, res)   # v3.12.0: やってよい失敗なら次を予約で入れる
     return res
+
+
+# ---------- v3.12.0: 書込失敗の自動やり直し（仕様 docs/SPEC_実行リスト_v0.md v1.2 14章） ----------
+def _will_retry(data: dict, order_id: str, res: dict) -> bool:
+    return (not res.get("success")) and auto_retry.eligible(
+        _template_name(data), order_id, str(res.get("error_type") or ""), str(res.get("left_in_homis") or ""))
+
+
+def _note_baseline(data: dict, order_id: str, homis_id: str, res: dict) -> None:
+    """やり直すときの控え（カルテ一覧の一番大きい番号）。1回目の失敗で取り、2回目以降は受け取った控えをそのまま使う"""
+    if not _will_retry(data, order_id, res):
+        return
+    if auto_retry.split_attempt(order_id)[1] >= 1 and data.get("baseline_karte_id") is not None:
+        res["baseline_karte_id"] = data.get("baseline_karte_id")
+        return
+    res["baseline_karte_id"] = auto_retry.latest_karte_id(homis_id)   # 読めなければ None（やり直しの前に必ず止まる）
+
+
+def _schedule_retry(data: dict, order_id: str, homis_id: str, res: dict) -> None:
+    """やってよい失敗なら、次のやり直しを同じ列に予約で入れ、記録を handed_over／scheduled にする。
+    入れられなければ「手で書いてください」（現場・DX）と記録の manual"""
+    if not _will_retry(data, order_id, res):
+        if not res.get("success") and auto_retry.split_attempt(order_id)[1] >= 1:
+            _mark_manual(data, order_id)   # 自動やり直しの最後（または途中で別の失敗）＝人が書く
+        return
+    nxt = auto_retry.next_order_id(order_id)
+    attempt = auto_retry.split_attempt(nxt)[1]
+    if not nxt or attempt > auto_retry.MAX_ATTEMPTS:   # 念のための上限（どんな場合も 3 回を超えない）
+        return
+    delay = auto_retry.DELAYS_SEC[attempt]
+    payload = {k: v for k, v in data.items() if k not in ("orderId", "baseline_karte_id")}
+    payload["orderId"] = nxt
+    payload["baseline_karte_id"] = res.get("baseline_karte_id")
+    payload["recordDay"] = data.get("recordDay") or run_record.today()
+    if res.get("baseline_karte_id") is None:
+        # 控え（カルテ一覧の番号）が取れなかった。やり直すと人が書いたか分からないので、入れずに「手で」に回す
+        word = "error:no_baseline"
+    else:
+        word = auto_retry.enqueue(_template_name(data), payload, delay)
+    logger.info("自動やり直しを入れた orderId=%s 次=%s 遅らせ=%s秒 結果=%s", order_id, nxt, delay, word)
+    if word not in ("queued", "duplicate"):
+        _notify_field(order_id, _patient_url(homis_id, ""), str(res.get("error_type") or ""), _template_name(data),
+                      prefix="自動でやり直せませんでした。手で書いてください。\n") if (_is_live_fax(data) or _is_live_bot(data)) else None
+        navi_callback.notify_dx(f"HOMIS ライター（GCP）: 自動やり直しを列に入れられませんでした（{word}）。現場に「手で書いてください」を出しました。"
+                                f"\n{_patient_url(homis_id, '')}\norderId={order_id}", order_id)
+        _mark_manual(data, order_id)
+        return
+    retry_at = (datetime.now(timezone.utc) + timedelta(seconds=delay)).astimezone(timezone(timedelta(hours=9))).isoformat(timespec="seconds")
+    parent = {}
+
+    def change(rec: dict) -> None:
+        rec["status"] = "handed_over"
+        rec["retried_as"] = nxt
+        rec["retry_at"] = retry_at
+        run_record.add_timeline(rec, f"自動で再書込へ（{nxt[-2:]}・{retry_at[11:16]}）")
+        parent.update({k: rec.get(k) for k in ("doc_type", "source", "fax_route", "route", "patient")})
+    run_record.update(data.get("recordDay"), order_id, change)
+    child = {"order_id": nxt, "route": parent.get("route") or run_record.route_of(nxt), "status": "scheduled",
+             "received_at": run_record.now_iso(), "retry_of": order_id, "retry_at": retry_at, "attempt": attempt,
+             "payload": {k: v for k, v in payload.items() if k not in ("recordDay", "baseline_karte_id")},
+             "patient": parent.get("patient") or {"homis_id": homis_id}}
+    for k in ("doc_type", "source", "fax_route"):
+        if parent.get(k):
+            child[k] = parent[k]
+    run_record.add_timeline(child, f"自動で再書込を予約（{retry_at[11:16]}）")
+    run_record.create(data.get("recordDay"), nxt, child)
+
+
+def _mark_manual(data: dict, order_id: str) -> None:
+    def change(rec: dict) -> None:
+        rec["manual"] = True
+        run_record.add_timeline(rec, "手動でお願いします（自動の再書込はここまで）")
+    run_record.update(data.get("recordDay"), order_id, change)
+
+
+def _skipped_human(data: dict, order_id: str, homis_id: str, t0: float, sheet_row: int, now_id) -> dict:
+    """やり直しの前に、控えより新しいカルテがあった（人が書いた見込み）・一覧が読めなかった。書かずに止める。
+    現場には出さない（人がもう書いているため）。DX に、見つけた番号・控え・直リンク（黒ヤギ 仕様3回目 指摘1）"""
+    # 新しいカルテが見つかった＝人が書いた見込み（現場には出さない）。一覧が読めない・控えが無い＝分からない（手で書いてもらう）
+    err = "skipped:new_karte_found" if now_id is not None else "skipped:karte_list_unreadable"
+    total = time.time() - t0
+    log_result(order_id, False, "", err, total)
+    if now_id is not None:
+        navi_callback.notify_dx(
+            f"HOMIS ライター（GCP）: 自動やり直しを書かずに止めました。控え {data.get('baseline_karte_id')} より新しいカルテ {now_id} があります"
+            f"（人が書いた見込み）。FAX・問い合わせの中身が書かれているか確かめてください。"
+            f"\n{_patient_url(homis_id, '')}\n見つけたカルテ番号 {now_id}\norderId={order_id}", order_id)
+    else:
+        if _is_live_fax(data) or _is_live_bot(data):
+            _notify_field(order_id, _patient_url(homis_id, ""), err, _template_name(data),
+                          prefix="自動でやり直せませんでした（カルテ一覧を読めず、人が書いたか分からないため）。手で書いてください。\n")
+        navi_callback.notify_dx(f"HOMIS ライター（GCP）: 自動やり直しを書かずに止めました（カルテ一覧が読めない・控えが無い）。現場に「手で書いてください」を出しました。"
+                                f"\n{_patient_url(homis_id, '')}\norderId={order_id}", order_id)
+        _mark_manual(data, order_id)
+    if sheet_row:
+        try:
+            finish(sheet_row, "fail", "", err)
+        except Exception:
+            logger.exception("結果シート更新失敗 orderId=%s", order_id)
+    return {"orderId": order_id, "success": False, "has_karte_id": False, "error_type": err, "karte_opened": False,
+            "total_sec": round(total, 1), "karte_id": "", "karte_url": "", "left_in_homis": "none"}
 
 
 # v3.11.0: 実行リストの記録で、ライターが受け口の記録に足す欄（payload は受け口が入れる。無いときだけライターが入れる）
@@ -662,6 +791,12 @@ def _record_finished(data: dict, order_id: str, res: dict) -> None:
         rec["total_sec"] = res.get("total_sec")
         rec["finished_at"] = run_record.now_iso()
         run_record.add_timeline(rec, "書けた" if res.get("success") else "書けなかった")
+        if res.get("verify"):   # v3.12.0: 書込後確認（ok／o_mismatch など／unverified）
+            rec["verify"] = str(res.get("verify"))
+            run_record.add_timeline(rec, "書込後確認 " + {"ok": "○", "ok_processed": "○（そのあと人が処理）",
+                                                           "unverified": "未確認（カルテは保存済み）"}.get(rec["verify"], "×"))
+        if res.get("baseline_karte_id") is not None:
+            rec["baseline_karte_id"] = res.get("baseline_karte_id")
     word = run_record.update(data.get("recordDay"), order_id, change)
     if word not in ("off", "updated", "created"):
         logger.warning("実行リストの記録（結果）を書けなかった orderId=%s %s", order_id, word)
@@ -686,14 +821,35 @@ def left_in_homis(success: bool, blocked: str, stopped: str, left_editing: str, 
     return "unknown"
 
 
+def _field_notice(data: dict, order_id: str, homis_id: str, page_url: str, err: str, left: str) -> None:
+    """v3.12.0: 書けなかったときの現場への知らせ（仕様 14.4）。自動でやり直すかで文と出す先を変える"""
+    if not (_is_live_fax(data) or _is_live_bot(data)):
+        return
+    template = _template_name(data)
+    attempt = auto_retry.split_attempt(order_id)[1]
+    will = auto_retry.eligible(template, order_id, err, left)
+    if attempt == 0 and will:
+        _notify_field(order_id, page_url, err, template, prefix=RETRY_FIRST_HEAD, note=RETRY_FIRST_NOTE)
+    elif attempt == 0:
+        _notify_field(order_id, page_url, err, template)
+    elif will:
+        nxt = auto_retry.next_order_id(order_id)
+        navi_callback.notify_dx(
+            f"HOMIS ライター（GCP）: 自動やり直し {attempt} 回目も書けませんでした（{FIELD_REASON.get(err, err)}）。"
+            f"{auto_retry.DELAYS_SEC[attempt + 1] // 60} 分後に {nxt[-2:]} を書きます。現場には出していません。"
+            f"\n{page_url}\norderId={order_id}", order_id)
+    else:
+        n = attempt if (left == "none" and err in auto_retry.RETRYABLE_ERRORS) else 0
+        _notify_field(order_id, page_url, err, template, prefix=RETRY_FINAL_HEAD.format(n=n) if n else "")
+
+
 def _locked_out(data: dict, order_id: str, homis_id: str, t0: float, sheet_row: int, lock: dict) -> dict:
     """v3.9.0: 札が取れなかった（busy＝時間内に順番が来ない／error＝置き場が使えない）。何も書かずに、
     共有ログ・現場（本番）・DX・結果シート（fail）をほかの失敗と同じ流れで出す（黒ヤギ仕様1回目 指摘3）"""
     err = "locked:busy" if lock["status"] == "busy" else "locked:error"
     total = time.time() - t0
     log_result(order_id, False, "", err, total)
-    if _is_live_fax(data) or _is_live_bot(data):
-        _notify_field(order_id, _patient_url(homis_id, ""), err, _template_name(data))
+    _field_notice(data, order_id, homis_id, _patient_url(homis_id, ""), err, "none")   # v3.12.0: 自動やり直しで文を変える
     navi_callback.notify_dx(
         f"HOMIS ライター（GCP）: {FIELD_REASON[err]}。何も書かずに止めました"
         f"（札 {patient_lock.lock_name(homis_id)}・待ち {lock.get('waited_sec', 0)}秒・{lock.get('reason', '')}）。"
@@ -813,7 +969,7 @@ def _write_locked(data: dict, order_id: str, homis_id: str, t0: float, t_write: 
                                       expect=VERIFY_EXPECT.get(_template_name(data), "done"))
         logger.info("読み直し orderId=%s verdict=%s status=%s reads=%s s_len=%s o_len=%s reason=%s", order_id,
                     checked["verdict"], checked["status"], checked["reads"], checked["s_len"], checked["o_len"], checked["reason"])
-        if checked["verdict"] != "ok":
+        if checked["verdict"] not in ("ok", "ok_processed"):   # v3.12.0: 人が直後に処理した（ok_processed）は DX に出さない
             navi_callback.notify_dx(
                 "HOMIS ライター（GCP）: " + VERIFY_TEXT.get(checked["verdict"], checked["verdict"])
                 + f"（状態 {checked.get('status_label') or checked['status'] or '－'}）。HOMIS でカルテを確かめてください。"
@@ -825,8 +981,11 @@ def _write_locked(data: dict, order_id: str, homis_id: str, t0: float, t_write: 
             err = "verify:" + checked["verdict"]
     total = time.time() - t0
     log_result(order_id, bool(result.get("success")), kid, err, total)
-    if (_is_live_fax(data) or _is_live_bot(data)) and not result.get("success"):
-        _notify_field(order_id, _patient_url(homis_id, url), err, _template_name(data))
+    # v3.12.0: 知らせの振り分け（自動でやり直すか）に使うので、HOMIS に残したものを先に決める
+    left = left_in_homis(bool(result.get("success")), blocked, stopped, left_editing, opened, err,
+                         bool(getattr(_TLS, "order_kids", []) or []))
+    if not result.get("success"):
+        _field_notice(data, order_id, homis_id, _patient_url(homis_id, url), err, left)
     if blocked:
         why = FIELD_REASON.get("blocked:" + blocked, blocked)
         if _template_name(data) == "fax_so":
@@ -914,8 +1073,7 @@ def _write_locked(data: dict, order_id: str, homis_id: str, t0: float, t_write: 
         "retried_blocked": blocked_retry,   # v3.8.0: 入力途中のカルテで止められて、あけてやり直したら "in_progress_karte"
         "lock_waited_sec": lock.get("waited_sec", 0),   # v3.9.0: 札を待った秒
         # v3.11.0: HOMIS に残したもの（実行リストの再書き込みの判定）
-        "left_in_homis": left_in_homis(bool(result.get("success")), blocked, stopped, left_editing, opened, err,
-                                       bool(getattr(_TLS, "order_kids", []) or [])),
+        "left_in_homis": left,
     }
 
 

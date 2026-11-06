@@ -247,7 +247,7 @@ class StopRetry(unittest.TestCase):
 
     def test_t0_template_flags(self):
         steps = {s["name"]: s for s in self.tpl["steps"]}
-        self.assertEqual(self.tpl["version"], "1.2")
+        self.assertEqual(self.tpl["version"], "1.3")   # 1.3: 算定不要が付いていれば外す（stop_on_fail は付けない）
         self.assertTrue(steps["S欄に入力"].get("stop_on_fail"))
         self.assertTrue(steps["S欄をもう一度確かめる"].get("stop_on_fail"))
         # S 以外の手順には付けない（失敗しても今までどおり進む）

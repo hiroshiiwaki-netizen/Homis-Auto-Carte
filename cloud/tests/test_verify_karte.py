@@ -227,6 +227,31 @@ class VerifyKarte(unittest.TestCase):
             self.h.karte_script = [self.bot(who=who)]
             self.assertEqual(self.run_i()["verdict"], "ok", who)
 
+    def test_i6_processed_by_human_right_after(self):
+        # v1.3.0: 中断で書いた直後に HIO さんが完了（ORCA登録不要 7）にした。更新者が人・S が同じなら書込成功
+        for st in ("3", "5", "6", "7"):
+            self.h.karte_script = [self.bot(status=st, who="職員 太郎", o="処理のメモ"), self.bot(status=st, who="職員 太郎", o="処理のメモ")]
+            r = self.run_i()
+            self.assertEqual(r["verdict"], "ok_processed", st)
+            self.assertNotIn("太郎", json.dumps(r, ensure_ascii=False))
+
+    def test_i7_processed_but_s_changed_is_not_ok(self):
+        # 人が完了にしたが S が違う → 書けたかどうか分からないので今まで通り失敗側
+        self.h.karte_script = [self.bot(status="7", who="職員 太郎", s="別の文"), self.bot(status="7", who="職員 太郎", s="別の文")]
+        self.assertEqual(self.run_i()["verdict"], "not_interrupted")
+
+    def test_i8_writer_completed_itself_is_still_failure(self):
+        # ライター自身が完了にしてしまった（本当の失敗）は今まで通り
+        self.h.karte_script = [self.bot(status="7"), self.bot(status="7")]
+        self.assertEqual(self.run_i()["verdict"], "not_interrupted")
+
+    def test_i9_fax_is_unchanged(self):
+        # FAX（expect=done）は変えない: 人が更新していても完了・S/O 一致なら ok、O が違えば o_mismatch
+        k = karte(status="7")
+        k["upd_user"] = {"full_name": "職員 太郎"}
+        self.h.karte_script = [k]
+        self.assertEqual(self.run_v()["verdict"], "ok")
+
     def test_i4_o_must_be_blank(self):
         self.h.karte_script = [self.bot(o="訪問の記録")]
         self.assertEqual(self.run_i()["verdict"], "o_mismatch")

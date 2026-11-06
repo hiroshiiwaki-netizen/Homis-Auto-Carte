@@ -66,7 +66,11 @@ input[type=search]{min-width:300px;margin-left:auto}
 .row.ok{background:#f1fbf6;border-color:#cdeedd}
 .row.fail,.row.stale{background:#fff1f2;border-color:#f7c6ca}
 .row.running,.row.waiting{background:#fff8e8;border-color:#f6dfa9}
-.row.done{background:#f3f5f8;border-color:#dfe5ee}
+.row.done,.row.handed,.row.human{background:#f3f5f8;border-color:#dfe5ee}
+.row.scheduled{background:#fff8e8;border-color:#f6dfa9}
+.badge.handed,.badge.human{background:#e8edf3;color:#5b6b7f}
+.badge.scheduled{background:var(--runbg);color:var(--run)}
+.badge.manual{background:var(--ng);color:#fff}
 .row.test{outline:2px dashed #94a3b8}
 .tm{font-size:20px;font-weight:700}
 .tm small{display:block;font-size:11px;color:var(--sub);font-weight:400}

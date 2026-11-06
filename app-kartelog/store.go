@@ -36,6 +36,9 @@ type Record struct {
 	TotalSec    *float64 `json:"total_sec,omitempty"`
 	RetryOf     string   `json:"retry_of,omitempty"`
 	RetriedAs   string   `json:"retried_as,omitempty"`
+	RetryAt     string   `json:"retry_at,omitempty"` // 0.3.0: 自動やり直しの予約の時刻
+	Attempt     int      `json:"attempt,omitempty"`  // 0.3.0: 何回目の自動やり直しか（1〜3）
+	Manual      bool     `json:"manual,omitempty"`   // 0.3.0: 自動やり直しはここまで（手動でお願いします）
 }
 
 // Patient は患者さん（名前は第2段から）。
