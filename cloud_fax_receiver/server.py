@@ -8,7 +8,8 @@
   v0.7.0 11/06 共通 JSON の入口 ①先生が選んだカルテに書く（POST /karte/receive・仕様 docs/FAXカルテ_検討/SPEC_共通JSON入口_v0.md v1.0）。
                合言葉 KARTE_RECEIVER_KEY・KARTE_MODE（off／test／live・既定 off）・列 KARTE_QUEUE。karte_url から患者番号とカルテ番号を読み、
                sent_at・save_mode（中断だけ）・S が空でない・時刻の形・test はテスト患者だけ を確かめ、だめなら 4xx＋理由（Tukusi の赤丸）。
-               注文番号 KE-<カルテ番号>-<送った時刻14桁>（test は KE-TEST-）。型紙 karte_edit の仕事を列に入れ、記録に received。②新規は次の版
+               注文番号 KE-<カルテ番号>-<送った時刻14桁>（test は KE-TEST-）。型紙 karte_edit の仕事を列に入れ、記録に received。②新規は次の版。
+               KARTE_MODE は off・test・live を明示。空・書き間違いは 503 no_config（黒ヤギ実装1回目 指摘4）
   v0.6.0 11/06 実行リストの記録（run_record.py 1.0.0・置き場 RECORD_BUCKET・空なら何もしない）。本番の FAX と問い合わせ（live・test）で、
                列に入れる前に received（無いときだけ作る＝ライターの記録を上書きしない）、落としたら rejected と理由を残す
                （黒ヤギ 実行リスト仕様1回目 指摘1: 受け口で落ちたものが一覧から消えないように）。ライターへの仕事に recordDay（記録の日付）を足す。
@@ -493,8 +494,9 @@ KARTE_REASON_TEXT = {
 
 
 def karte_mode() -> str:
+    """off／test／live。空・書き間違いは "bad"（黙って何もしないと Tukusi が書けたと思う・黒ヤギ実装1回目 指摘4）"""
     mode = os.environ.get("KARTE_MODE", "").strip().lower()
-    return mode if mode in ("off", "test", "live") else "off"
+    return mode if mode in ("off", "test", "live") else "bad"
 
 
 def parse_karte_url(url) -> tuple[str, str]:
@@ -525,6 +527,8 @@ def karte_order_id(karte_id: str, sent_at, test: bool) -> str:
 def check_karte_body(body: dict) -> tuple[str, dict]:
     """①の本文を確かめる。返り値 (理由 or "", ライターに渡す中身)。理由があれば 4xx で返す"""
     mode = karte_mode()
+    if mode == "bad":
+        return "no_config", {}
     if not body.get("karte_url"):
         if body.get("patient_id") or body.get("homis_url"):
             return "not_supported_yet", {}

@@ -50,7 +50,7 @@ class Karte(tr.Records):
         return out
 
     def test_k1_off_records_nothing(self):
-        port, _ = self.startk(KARTE_MODE="")
+        port, _ = self.startk(KARTE_MODE="off")
         code, body = self.send(port)
         self.assertEqual((code, body["order_id"], body["mode"]), (200, "KE-18000001-20261106160000", "off"))
         self.assertEqual((self.cloud.tasks, self.rec.calls), ([], []))
@@ -120,6 +120,12 @@ class Karte(tr.Records):
         port2, _ = self.startk(KARTE_QUEUE="")
         code, body = self.send(port2)
         self.assertEqual((code, body["error"]), (503, "no_config"))
+
+    def test_k7b_mode_unset_or_typo_is_503(self):
+        for m in ("", "liv"):
+            port, _ = self.startk(KARTE_MODE=m)
+            code, body = self.send(port)
+            self.assertEqual((code, body["error"]), (503, "no_config"), m)   # 黙って何もしない 200 にしない
 
     def test_k8_existing_routes_unchanged(self):
         port, _ = self.startk()

@@ -21,6 +21,7 @@ $files = @(
   @{ From = (Join-Path $here "patient_lock.py"); To = (Join-Path $dst "patient_lock.py") }
   @{ From = (Join-Path $here "run_record.py"); To = (Join-Path $dst "run_record.py") }
   @{ From = (Join-Path $here "auto_retry.py"); To = (Join-Path $dst "auto_retry.py") }
+  @{ From = (Join-Path $here "karte_guard.py"); To = (Join-Path $dst "karte_guard.py") }
   @{ From = (Join-Path $src "template_engine.py"); To = (Join-Path $dst "template_engine.py") }
   @{ From = (Join-Path $src "browser_actions.py"); To = (Join-Path $dst "browser_actions.py") }
   @{ From = (Join-Path $src "clipboard_utils.py"); To = (Join-Path $dst "clipboard_utils.py") }

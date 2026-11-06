@@ -47,6 +47,10 @@ class FakeRecords:
             def _trouble(self) -> bool:
                 if outer.mode == "hang":
                     time.sleep(outer.hang_sec)
+                    # 遅れたあとは書かない（呼んだ側はもう時間切れであきらめている。遅れて書くと、あとのテストの最中に
+                    # 記録が入り込んで数がずれる＝11/6 test_q9 が 3 回に 1 回 2 件になった）
+                    self._send(504, b"{}")
+                    return True
                 if outer.mode == "down":
                     self._send(500, b"{}")
                     return True

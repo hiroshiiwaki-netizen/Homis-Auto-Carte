@@ -59,6 +59,9 @@ class Judge(unittest.TestCase):
         self.assertTrue(kg.human_changed(base, kg.snapshot(k(upd="2026-11-06 10:05:00", who="医師 一郎"))))    # 人が書いた
         self.assertTrue(kg.human_changed(None, kg.snapshot(k())))                                          # 控えが無い
         self.assertTrue(kg.human_changed(base, None))                                                      # 今が読めない
+        # 生のカルテ（upd_user が辞書）を渡しても名前で比べる（黒ヤギ実装1回目 指摘2）
+        self.assertFalse(kg.human_changed(base, k(upd="2026-11-06 10:05:00")))
+        self.assertTrue(kg.human_changed(base, k(upd="2026-11-06 10:05:00", who="医師 一郎")))
 
 
 class Read(unittest.TestCase):
@@ -85,6 +88,14 @@ class Read(unittest.TestCase):
         os.environ["HOMIS_PASSWORD"] = "wrong"
         self.h.karte_script = [k()]
         self.assertEqual(kg.before_write("1234567", "100", TODAY), ("karte_unreadable", None))   # 読めなければ書かない
+
+    def test_r5_unreadable_reason_is_logged(self):
+        os.environ["HOMIS_PASSWORD"] = "wrong"
+        self.h.karte_script = [k()]
+        with self.assertLogs("karte_guard", level="WARNING") as cm:
+            kg.before_write("1234567", "100", TODAY)
+        self.assertIn("ValueError", cm.output[0])            # login_failed の種類と文がログに残る
+        self.assertIn("login_failed", cm.output[0])
 
     def test_r4_never_opens_edit(self):
         self.h.karte_script = [k()]
