@@ -15,7 +15,10 @@ header p{margin:6px 0 0;opacity:.9;font-size:14px}
 .hd-right{position:absolute;right:28px;top:22px;display:flex;gap:10px;align-items:center}
 .pill{background:rgba(255,255,255,.18);border:1px solid rgba(255,255,255,.35);color:#fff;border-radius:999px;padding:7px 14px;font-size:13px}
 button.pill{cursor:pointer;font-family:inherit;font-weight:700}
-.robot{position:absolute;right:300px;top:4px;height:140px;width:auto;filter:drop-shadow(0 6px 10px rgba(0,0,0,.25))}
+/* 0.3.1: ロボットは上の帯の中を走る（タイトルと右上のボタンの間を行ったり来たり・岩城さん「ロボットはしらせて 上の部分で」） */
+.runner{position:absolute;top:4px;left:480px;animation:robot-run 16s ease-in-out infinite}
+@keyframes robot-run{0%{left:480px;transform:rotate(-5deg)}46%{left:calc(100% - 340px);transform:rotate(-5deg)}50%{left:calc(100% - 340px);transform:rotate(5deg)}96%{left:480px;transform:rotate(5deg)}100%{left:480px;transform:rotate(-5deg)}}
+.robot{display:block;height:140px;width:auto;filter:drop-shadow(0 6px 10px rgba(0,0,0,.25))}
 /* 0.2.0: ロボットのアニメーション（ふだん＝ふわふわ・書込中＝せっせと揺れる・書込失敗あり＝ときどき震える） */
 .robot{transform-origin:50% 100%;animation:robot-float 3.2s ease-in-out infinite}
 .robot.robot-busy{animation:robot-work .9s ease-in-out infinite}
@@ -23,7 +26,7 @@ button.pill{cursor:pointer;font-family:inherit;font-weight:700}
 @keyframes robot-float{0%,100%{transform:translateY(0)}50%{transform:translateY(-6px)}}
 @keyframes robot-work{0%,100%{transform:rotate(-4deg) translateY(0)}50%{transform:rotate(4deg) translateY(-4px)}}
 @keyframes robot-shiver{0%,88%,100%{translate:0 0}90%{translate:-3px 0}92%{translate:3px 0}94%{translate:-2px 0}96%{translate:2px 0}}
-@media (prefers-reduced-motion:reduce){.robot,.robot.robot-busy,.robot.robot-alert{animation:none}}
+@media (prefers-reduced-motion:reduce){.runner,.robot,.robot.robot-busy,.robot.robot-alert{animation:none}.runner{left:auto;right:300px}}
 .wrap{position:relative;z-index:1;max-width:1180px;margin:-52px auto 40px;padding:0 20px}
 .tabs{display:flex;gap:8px;background:var(--card);padding:8px;border-radius:20px;box-shadow:0 8px 24px rgba(15,40,80,.08);flex-wrap:wrap}
 .tab{flex:1 1 auto;min-width:0;white-space:nowrap;border:0;background:transparent;border-radius:14px;padding:11px 8px;font-family:inherit;font-size:14px;font-weight:700;color:var(--sub);cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px}
@@ -106,4 +109,4 @@ h3{font-size:14px;margin:20px 0 6px;color:var(--sub)}
 .close{position:absolute;right:18px;top:18px;border:0;background:var(--line);border-radius:50%;width:34px;height:34px;font-size:18px;cursor:pointer}
 .shade{position:fixed;inset:0;background:rgba(15,30,60,.25);display:none;z-index:9}.shade.on{display:block}
 .err{background:#fff1f2;color:var(--ng);border-radius:14px;padding:10px 14px;margin-top:12px;display:none}.err.on{display:block}
-@media (max-width:860px){.kpis{grid-template-columns:1fr 1fr}.row{grid-template-columns:60px 1fr}.row>:nth-child(n+3){grid-column:1/-1}.robot{display:none}input[type=search]{min-width:0;width:100%}}
+@media (max-width:860px){.kpis{grid-template-columns:1fr 1fr}.row{grid-template-columns:60px 1fr}.row>:nth-child(n+3){grid-column:1/-1}.runner{display:none}input[type=search]{min-width:0;width:100%}}
