@@ -178,6 +178,7 @@ class KarteEdit(unittest.TestCase):
         self.assertEqual([n for n, s in steps.items() if s.get("stop_on_fail")],
                          ["編集ボタンをクリック", "S欄に入力", "O欄に入力", "S欄をもう一度確かめる"])
         self.assertNotIn("#karteNew", str(self.tpl))   # 新規は押さない
+        self.assertEqual(self.tpl["steps"][0]["name"], server.EDIT_BUTTON_STEP)   # ライターが手順の名前で見分けるため
         self.assertIn("karte_edit", server.ALLOWED_TEMPLATES)
 
     def test_e1_overwrites_and_keeps_blank_times_and_vitals(self):
@@ -315,7 +316,31 @@ class KarteEdit(unittest.TestCase):
             server._orig_click = keep
             auto_retry.enqueue = keep_enq
         self.assertEqual((out["success"], out["left_in_homis"]), (False, "editing"))
+        self.assertEqual(out["error_type"], "step:編集ボタンをクリック")   # S の確かめの失敗と取り違えない（黒ヤギ 3回目 指摘2）
+        self.assertNotIn("S を入れたこと", self.homis.dx[0])
         self.assertEqual((sent, self.homis.saves), ([], []))
+
+    def test_e10_other_error_while_finding_button_is_retried(self):
+        """編集ボタンを探す途中で時間切れ以外の例外（Chrome が落ちた等）でも、開いていなければ timeout でやり直す（黒ヤギ 3回目 指摘1）"""
+        from selenium.common.exceptions import WebDriverException
+        keep = server.BrowserActions._find_element
+
+        def broken(self_, selector, *a, **k):
+            if selector == "#karteEdit":
+                raise WebDriverException("chrome not reachable")
+            return keep(self_, selector, *a, **k)
+        server.BrowserActions._find_element = broken
+        os.environ["RETRY_MODE"] = "on"
+        sent = []
+        keep_enq = auto_retry.enqueue
+        auto_retry.enqueue = lambda tpl, payload, delay: sent.append(payload["orderId"]) or "queued"
+        try:
+            out = self.write()
+        finally:
+            server.BrowserActions._find_element = keep
+            auto_retry.enqueue = keep_enq
+        self.assertEqual((out["success"], out["left_in_homis"], out["error_type"]), (False, "none", "timeout"))
+        self.assertEqual(sent, ["KE-18000001-20261106160000-A1"])
 
     def test_e9_edit_button_not_found_is_not_opened(self):
         """編集ボタンが見つからない（読み込みの遅れ等）ときは押していない＝ none（黒ヤギ 3.13.0 実装2回目 指摘1）"""

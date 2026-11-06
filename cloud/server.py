@@ -14,7 +14,8 @@
                知らせは DX の Chat だけ（送った先生・理由・直リンク・注文番号）。現場用 KARTE_FIELD_WEBHOOK はまだ無い。
                黒ヤギ実装1回目: ①では読み直しの ok_processed（人が処理した）を認めず not_interrupted に／編集ボタンは押す前に開いた扱い
                黒ヤギ実装2回目: 編集ボタンが見つからない（読み込みの遅れ等）ときは開いていない扱い（見つかってから開いた扱い）・時間切れ（timeout）として自動やり直しに回す／
-               読み直しで中断になっていない失敗の DX の知らせに「書いた直後に先生が開いた場合も」の一言
+               読み直しで中断になっていない失敗の DX の知らせに「書いた直後に先生が開いた場合も」の一言。
+               3回目: 編集ボタンの手順で止まり開いていなければ例外の種類に関係なく timeout（やり直す）／押している途中で落ちたら step:編集ボタンをクリック（editing）
   v3.12.0 11/06 書込失敗の自動やり直し（auto_retry.py 1.0.0・RETRY_MODE=on のときだけ・仕様 docs/SPEC_実行リスト_v0.md v1.2 14章）。
                HOMIS に何も残っていない失敗（locked・入力途中・知らせ・ログイン等）だけ、同じ列に -A1（5分後）・-A2（15分後）・-A3（30分後）を予約で入れる。
                最初の失敗でカルテ一覧の一番大きい番号を控え（札を外す前）、やり直しの前に控えより新しいカルテがあれば書かずに止める（人が書いた見込み）。
@@ -719,6 +720,7 @@ def _write_karte_inner(data: dict, order_id: str, homis_id: str) -> dict:
 
 # ---------- v3.13.0: 共通 JSON の入口 ①先生が選んだカルテに書く（型紙 karte_edit・仕様 SPEC_共通JSON入口_v0.md v1.0） ----------
 EDIT_TEMPLATE = "karte_edit"
+EDIT_BUTTON_STEP = "編集ボタンをクリック"   # karte_edit.yaml の最初の手順の名前（テストで型紙と同じかを確かめる）
 EDIT_TEXT_FIELDS = ("soap_s", "soap_o", "soap_ap_summary", "soap_ap_temporary", "instruction")
 EDIT_BLANK = "\u3000"   # 空の文の欄は全角スペース（HomisApi と同じ・仕様 3章）
 
@@ -753,10 +755,15 @@ def edit_outcome(result: dict, opened: bool, blocked: str, stopped: str, err: st
     if blocked:
         return False, ("skipped:" + blocked if blocked == "human_saved_during" else "blocked:" + blocked), "editing"
     if stopped:
+        if opened and stopped == EDIT_BUTTON_STEP:
+            # 編集ボタンを押している途中で落ちた（開いたかもしれない）。S の確かめではないので手順の名前で返す（黒ヤギ 3回目 指摘2）
+            return False, "step:" + stopped, "editing"
         if opened:
             return False, "stopped:unverified_input", "editing"
         # 編集ボタンが押せなかった（何も開いていない）。見つからなかった（読み込みの遅れ等）は時間切れとして自動やり直しに回す（黒ヤギ 2回目 指摘1）
-        return False, ("timeout" if getattr(_TLS, "edit_button_missing", False) else (err or "step:" + stopped)), "none"
+        # 例外の種類に関係なく、編集ボタンの手順で止まり開いていなければ時間切れとしてやり直す（何も開いていない・黒ヤギ 3回目 指摘1）
+        missing = getattr(_TLS, "edit_button_missing", False) or stopped == EDIT_BUTTON_STEP
+        return False, ("timeout" if missing else (err or "step:" + stopped)), "none"
     if not result.get("success"):
         return False, err or ("opened_then_fail" if opened else "unknown"), ("editing" if opened else "none")
     return True, ("" if err == "no_karte_id" else err), "saved"   # カルテ番号は送られてきたもの（リンクが取れなくてもよい）
