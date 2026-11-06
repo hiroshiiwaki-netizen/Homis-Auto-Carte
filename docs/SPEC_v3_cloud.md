@@ -36,7 +36,7 @@ FAX カルテの受け口（cloud_fax_receiver/・別の Cloud Run・仕様 `doc
 
 | ファイル | 版 | 最終更新 | 役割 |
 |---|---|---|---|
-| cloud_fax_receiver/server.py | 0.6.0（未配置。本番は 0.5.2・00013-2c2・BOT_MODE=live・BOT_QUEUE=homis-bot-writer） | 2026/11/06 | 段1: Tukusi WF1573 の横付けから受け取り、様子だけ記録。0.2.0（段1b）: FAX_MIRROR=on のとき同じ中身をテスト舞子あての仕事として列 homis-fax-mirror に入れる。0.3.0（段3）: FAX_MODE＝off／mirror／live。live は本物の患者さんあての仕事を列 homis-fax-writer へ・仕事にできなければ現場と DX に知らせる。0.4.0: 問い合わせの口 /bot/receive（BOT_MODE＝off／test／live・既定 off）。0.5.0: 仕事に dispatchDeadline 900s・問い合わせは BOT_QUEUE（空なら LIVE_QUEUE）。0.6.0: 実行リストの記録（received・rejected）・仕事に recordDay |
+| cloud_fax_receiver/server.py | 0.7.0（未配置。本番は 0.6.0・00014-49r・BOT_MODE=live・BOT_QUEUE=homis-bot-writer・RECORD_BUCKET） | 2026/11/06 | 段1: Tukusi WF1573 の横付けから受け取り、様子だけ記録。0.2.0（段1b）: FAX_MIRROR=on のとき同じ中身をテスト舞子あての仕事として列 homis-fax-mirror に入れる。0.3.0（段3）: FAX_MODE＝off／mirror／live。live は本物の患者さんあての仕事を列 homis-fax-writer へ・仕事にできなければ現場と DX に知らせる。0.4.0: 問い合わせの口 /bot/receive（BOT_MODE＝off／test／live・既定 off）。0.5.0: 仕事に dispatchDeadline 900s・問い合わせは BOT_QUEUE（空なら LIVE_QUEUE）。0.6.0: 実行リストの記録（received・rejected）・仕事に recordDay。0.7.0: 共通 JSON の入口 ① /karte/receive（KARTE_MODE 既定 off） |
 | cloud_fax_receiver/run_record.py | 1.1.0（cloud/run_record.py の写し） | 2026/11/06 | 上と同じ。1.1.0: 道の名前 karte_edit（KE-）・karte_edit_test（KE-TEST-） |
 | cloud/karte_guard.py | 1.0.0（未配置・まだどこからも呼ばない） | 2026/11/06 | 共通 JSON の入口 ①の書く前の確かめ（患者・完了・取消・診察日が今日か昨日）と、人が書いたかの見分け（更新日時が変わり更新者がライター以外）。読むだけ |
 | tools/fax_requeue.py | 0.1.1 | 2026/10/29 | 段3 の切り替えの間に来た FAX を、札番号→p281 の札の記録で患者さん→試し書きの S・O→本物に同じものが無いのを見てから列に入れる（既定は見るだけ・--go で入れる） |
