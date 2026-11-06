@@ -18,12 +18,12 @@ button.pill{cursor:pointer;font-family:inherit;font-weight:700}
 .robot{position:absolute;right:300px;top:4px;height:140px;width:auto;filter:drop-shadow(0 6px 10px rgba(0,0,0,.25))}
 /* 0.2.0: ロボットのアニメーション（ふだん＝ふわふわ・書込中＝せっせと揺れる・書込失敗あり＝ときどき震える） */
 .robot{transform-origin:50% 100%;animation:robot-float 3.2s ease-in-out infinite}
-.robot.busy{animation:robot-work .9s ease-in-out infinite}
-.robot.alert{animation:robot-float 3.2s ease-in-out infinite,robot-shiver 4s linear infinite}
+.robot.robot-busy{animation:robot-work .9s ease-in-out infinite}
+.robot.robot-alert{animation:robot-float 3.2s ease-in-out infinite,robot-shiver 4s linear infinite}   /* .alert（赤い知らせの枠・ふだん非表示）と名前を分ける（0.3.0）*/
 @keyframes robot-float{0%,100%{transform:translateY(0)}50%{transform:translateY(-6px)}}
 @keyframes robot-work{0%,100%{transform:rotate(-4deg) translateY(0)}50%{transform:rotate(4deg) translateY(-4px)}}
 @keyframes robot-shiver{0%,88%,100%{translate:0 0}90%{translate:-3px 0}92%{translate:3px 0}94%{translate:-2px 0}96%{translate:2px 0}}
-@media (prefers-reduced-motion:reduce){.robot,.robot.busy,.robot.alert{animation:none}}
+@media (prefers-reduced-motion:reduce){.robot,.robot.robot-busy,.robot.robot-alert{animation:none}}
 .wrap{position:relative;z-index:1;max-width:1180px;margin:-52px auto 40px;padding:0 20px}
 .tabs{display:flex;gap:8px;background:var(--card);padding:8px;border-radius:20px;box-shadow:0 8px 24px rgba(15,40,80,.08);flex-wrap:wrap}
 .tab{flex:1 1 auto;min-width:0;white-space:nowrap;border:0;background:transparent;border-radius:14px;padding:11px 8px;font-family:inherit;font-size:14px;font-weight:700;color:var(--sub);cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px}

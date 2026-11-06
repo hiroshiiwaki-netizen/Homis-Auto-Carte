@@ -132,8 +132,8 @@ function render() {
   $("kLabel").textContent = st.d === 7 ? "7日の件数" : (st.from && st.from !== todayStr() ? md(st.from + "T") + "の件数" : "今日の件数");
   const robot = document.querySelector(".robot");   // 0.2.0: 書込中・待機中があればせっせと揺れる・書込失敗があれば震える
   if (robot) {
-    robot.classList.toggle("busy", rows.some(isRun));
-    robot.classList.toggle("alert", !rows.some(isRun) && rows.some(isFail));
+    robot.classList.toggle("robot-busy", rows.some(isRun));
+    robot.classList.toggle("robot-alert", !rows.some(isRun) && rows.some(isFail));   // "alert" は赤い枠の名前とぶつかる（0.2.x で消えた）
   }
   $("kAll").textContent = base.length; $("kOk").textContent = ok; $("kNg").textContent = ng.length; $("kRun").textContent = run;
   const done = ok + ng.length;
