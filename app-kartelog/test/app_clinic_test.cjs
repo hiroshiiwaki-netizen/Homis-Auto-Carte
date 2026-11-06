@@ -1,4 +1,4 @@
-// 実行リスト 0.3.2 クリニックで絞った数字の試験（偽の画面部品で public/app.js を動かす。node だけで動く）
+// 実行リスト 0.3.2〜0.3.4 クリニックで絞った数字の試験（偽の画面部品で public/app.js を動かす。node だけで動く）
 // 使い方: node app-kartelog/test/app_clinic_test.cjs [app.js のパス]（省略時は ../public/app.js）
 const fs = require("fs");
 const vm = require("vm");
@@ -10,8 +10,10 @@ const el = (id) => els[id] || (els[id] = {
   setAttribute() {}, appendChild() {}, addEventListener() {},
 });
 const robot = el("robot");
+const clicks = [];   // 0.3.4: 画面のクリックの受け手（document の click）を拾って、ボタンを押したことにする
+const press = (id) => clicks.forEach((fn) => fn({ target: { closest: () => ({ id, dataset: {} }) } }));
 const ctx = {
-  document: { getElementById: el, querySelector: () => robot, querySelectorAll: () => [], addEventListener() {}, createElement: () => ({ style: {} }), hidden: false },
+  document: { getElementById: el, querySelector: () => robot, querySelectorAll: () => [], addEventListener(type, fn) { if (type === "click") clicks.push(fn); }, createElement: () => ({ style: {} }), hidden: false },
   navigator: {}, setInterval() {}, console,
   fetch: async () => ({ ok: true, json: async () => ({}) }),
 };
@@ -59,8 +61,24 @@ eq("院の分からない書込失敗で赤い知らせ", els.alertBox.classList
 eq("すべてのクリニックへのボタン", els.alertBox.innerHTML.includes('id="allClinic"'), true);
 st.rows.push(row("垂水", "fail", "12")); ctx.__render();
 eq("院の失敗とあわせて書く", /書込失敗が 1 件[\s\S]*ほかに院の分からない行に書込失敗が 1 件/.test(els.alertBox.innerHTML), true);
+eq("院の失敗があってもすべてのクリニックへのボタン", els.alertBox.innerHTML.includes('id="allClinic"') && els.alertBox.innerHTML.includes('id="onlyFail"'), true);
 st.clinic = ""; ctx.__render();
 eq("すべてのときは注意書きなし", el("barsLabel").textContent, "8時〜19時の時間ごと");
+
+// 0.3.4: 患者様は見つかったが院の名前が空の行も「院の分からない」に入る（黒ヤギ2回目 指摘1）
+st.rows = [row("垂水", "ok", "09"), { ...row("垂水", "fail", "10"), pinfo: { found: true, clinic: "" } }];
+st.clinic = "垂水"; ctx.__render();
+eq("院の名前が空の行も院の分からないに入る", el("barsLabel").textContent, "8時〜19時の時間ごと／院の分からない 1 件は入っていません");
+eq("院の名前が空の書込失敗で赤い知らせ", els.alertBox.classList.contains("on"), true);
+
+// 0.3.4: すべてのクリニックで見る を押すと、院・エラーの種類・検索語を外して書込失敗だけ（指摘2）
+st.err = "login"; st.q = "abc"; el("q").value = "abc";
+press("allClinic");
+eq("押すと院の絞りが外れる", st.clinic, "");
+eq("押すとエラーの種類が外れる", st.err, "");
+eq("押すと検索語が外れる", st.q + "|" + el("q").value, "|");
+eq("押すと書込失敗だけ", st.s, "fail");
+eq("押したあと一覧に書込失敗の行が出る", /class="row/.test(els.list.innerHTML), true);
 
 console.log(bad ?`FAIL ${bad}` : "ALL OK");
 process.exit(bad ? 1 : 0);
