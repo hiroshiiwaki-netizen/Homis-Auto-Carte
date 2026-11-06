@@ -11,7 +11,8 @@
                自動やり直し（-A1〜）は控えから人が書いていれば止める（skipped:human_edited）。保存の直前にもう一度読み、人が保存していれば保存しない
                （skipped:human_saved_during・編集中が残る）。空の時刻・バイタルは触らない（skip_if_empty）。空の文の欄は全角スペース。
                止まった後の新規での取り直し・入力途中の90秒やり直し・前の書きかけの守りは使わない（新規の守りのため）。読み直しは中断で（O は見ない）。
-               知らせは DX の Chat だけ（送った先生・理由・直リンク・注文番号）。現場用 KARTE_FIELD_WEBHOOK はまだ無い
+               知らせは DX の Chat だけ（送った先生・理由・直リンク・注文番号）。現場用 KARTE_FIELD_WEBHOOK はまだ無い。
+               黒ヤギ実装1回目: ①では読み直しの ok_processed（人が処理した）を認めず not_interrupted に／編集ボタンは押す前に開いた扱い
   v3.12.0 11/06 書込失敗の自動やり直し（auto_retry.py 1.0.0・RETRY_MODE=on のときだけ・仕様 docs/SPEC_実行リスト_v0.md v1.2 14章）。
                HOMIS に何も残っていない失敗（locked・入力途中・知らせ・ログイン等）だけ、同じ列に -A1（5分後）・-A2（15分後）・-A3（30分後）を予約で入れる。
                最初の失敗でカルテ一覧の一番大きい番号を控え（札を外す前）、やり直しの前に控えより新しいカルテがあれば書かずに止める（人が書いた見込み）。
@@ -425,11 +426,13 @@ def _click_cloud(self, selector, selector_type="css", text_contains=""):
     if selector in ("#karteCompletion", "#karteInterruption"):
         self.driver.execute_script("window.confirm=()=>true; window.alert=()=>{};")
         logger.info("保存前にアラート自動OKを設定")
+    if selector == "#karteEdit":
+        # v3.13.0: 押す前に「開いた」とする（押している途中で Chrome が落ちても、開いたかもしれない＝やり直さない側・黒ヤギ 3.13.0 実装1回目 指摘3）
+        _TLS.karte_opened = True
     out = _orig_click(self, selector, selector_type, text_contains)
     if selector == "#karteEdit":
         # v3.13.0: 先生が選んだカルテの編集を開いた。新規の守り（前の書きかけ）は使わない
         kid = str(getattr(_TLS, "edit_kid", "") or "")
-        _TLS.karte_opened = True
         _TLS.edit_checked = True
         _TLS.current_kid = kid
         _note_kid(kid)
@@ -812,10 +815,11 @@ def _write_edit_locked(data: dict, order_id: str, homis_id: str, t0: float, shee
     if success:
         checked = verify_karte.verify(homis_id, kid, filled["sContent"], filled["oContent"], expect="interrupt")
         verdict = "ok" if checked["verdict"] == "o_mismatch" else checked["verdict"]   # O は v0 では見ない（仕様 6章）
-        if verdict == "ok_processed" and checked.get("reason") == "s_edited":
-            # verify_karte 1.4.0 は「S が空でなければ人が処理した」とみなす。①は先生の今のカルテに上書きするので、
-            # 保存に失敗しても前の S が残っていて空にならない。①では S が送ったとおりのときだけ成功にする
-            verdict = "s_mismatch"
+        if verdict == "ok_processed":
+            # verify_karte 1.4.0 は「状態が診察中・編集中・完了でも S が空でなければ人が処理した」とみなす。①は先生の今のカルテに
+            # 上書きするので、ライターが編集を開いたまま保存に失敗しても（開くだけで状態 1・70）前の S が残り成功に見える。
+            # ①では人が処理した扱いは認めず失敗にする（黒ヤギ 3.13.0 実装1回目 指摘1）
+            verdict = "not_interrupted"
         logger.info("読み直し orderId=%s verdict=%s status=%s reason=%s", order_id, checked["verdict"], checked["status"], checked["reason"])
         if verdict not in ("ok", "ok_processed", "unverified"):
             success, err, left = False, "verify:" + verdict, "saved"

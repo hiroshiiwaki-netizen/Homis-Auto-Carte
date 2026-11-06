@@ -281,11 +281,12 @@ class KarteEdit(unittest.TestCase):
         self.assertNotIn("baseline_karte_id", payload)
         self.assertIn("5 分後にやり直します", self.homis.dx[0])
 
-    def test_v1_processed_with_other_s_is_failure(self):
-        """verify_karte 1.4.0 の ok_processed（S が空でない）でも、①では S が違えば失敗（前の S が残っただけの見込み）"""
+    def test_v1_processed_is_failure_for_karte_edit(self):
+        """verify_karte 1.4.0 の ok_processed（S が空でない）は、①では S が同じでも違っても失敗（黒ヤギ 3.13.0 実装1回目 指摘1:
+        ライターが編集を開いたまま保存に失敗すると状態は 1・70 になり、前の S が残るため）"""
         keep = server.verify_karte
         try:
-            for reason, want in (("s_edited", (False, "verify:s_mismatch")), ("", (True, ""))):
+            for reason, want in (("s_edited", (False, "verify:not_interrupted")), ("", (False, "verify:not_interrupted"))):
                 server.verify_karte = types.SimpleNamespace(verify=lambda *a, r=reason, **k: {
                     "verdict": "ok_processed", "status": "1", "status_label": "診察中", "reads": 2,
                     "s_len": 3, "o_len": 0, "reason": r})
@@ -294,6 +295,27 @@ class KarteEdit(unittest.TestCase):
                 self.assertEqual((out["success"], out["error_type"]), want, reason)
         finally:
             server.verify_karte = keep
+
+    def test_e8_edit_click_crash_is_not_retried(self):
+        """編集ボタンを押している途中で落ちても「開いたかもしれない」＝ editing（自動やり直しに回さない・黒ヤギ 指摘3）"""
+        os.environ["RETRY_MODE"] = "on"
+        keep = server._orig_click
+
+        def crash(self_, selector, *a, **k):
+            if selector == "#karteEdit":
+                raise RuntimeError("chrome not reachable")
+            return keep(self_, selector, *a, **k)
+        server._orig_click = crash
+        sent = []
+        keep_enq = auto_retry.enqueue
+        auto_retry.enqueue = lambda *a: sent.append(a) or "queued"
+        try:
+            out = self.write()
+        finally:
+            server._orig_click = keep
+            auto_retry.enqueue = keep_enq
+        self.assertEqual((out["success"], out["left_in_homis"]), (False, "editing"))
+        self.assertEqual((sent, self.homis.saves), ([], []))
 
     def test_c1_fill_rules(self):
         f = server.edit_fill({"soap_s": "S", "soap_o": "x" * 70000, "soap_ap_summary": " ", "soap_ap_temporary": None,

@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 """共通 JSON の入口 ①先生が選んだカルテに書く ときの、書く前の確かめと「人が書いたか」の見分け（読むだけ）
 
-版: 1.0.2
+版: 1.0.3
 最終更新: 2026-11-06
 改定履歴:
+  v1.0.3 11/06 黒ヤギ 3.13.0 実装1回目 指摘2: 読み直すまでの間を 0.5 秒 → 1 秒（保存の直前の一時的な揺らぎで保存をやめないように）
   v1.0.2 11/06 黒ヤギ実装2回目の申し送り: 読めなかったら 0.5 秒おいて1回だけ読み直す（一時的な通信の揺らぎで止めない）／ログの例外の文は改行を空白に
   v1.0.1 11/06 黒ヤギ実装1回目: 読めなかった理由（例外の種類と短い文）をログに残す／human_changed に生のカルテ（upd_user が辞書）を渡しても名前で比べる
   v1.0.0 11/06 新規（仕様 docs/FAXカルテ_検討/SPEC_共通JSON入口_v0.md v1.0 5章 2)・2b)・3b)・14章）。
@@ -23,13 +24,13 @@ from datetime import date, datetime, timedelta, timezone
 
 import verify_karte
 
-VERSION = "1.0.2"
+VERSION = "1.0.3"
 JST = timezone(timedelta(hours=9))
 logger = logging.getLogger("karte_guard")
 DONE_STATUS = verify_karte.DONE_STATUS   # 3・5・6・7
 CANCEL_STATUS = {"0"}
 READ_TRIES = 2          # 1.0.2: 読めなければ1回だけ読み直す
-READ_RETRY_WAIT = 0.5
+READ_RETRY_WAIT = 1.0   # 黒ヤギ 3.13.0 実装1回目 指摘2: 保存の直前の一時的な揺らぎに備えて 1 秒あける
 
 
 def max_days() -> int:
