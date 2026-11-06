@@ -1,4 +1,5 @@
-// カルテライター 実行リスト 0.3.2（読むだけ・第1段）
+// カルテライター 実行リスト 0.3.3（読むだけ・第1段）
+// 0.3.3 (2026-11-06) 院を選んでいるとき、院の分からない行の件数を棒グラフの下に出し、その中の書込失敗は赤い知らせで知らせる（黒ヤギ指摘1）
 // 0.3.2 (2026-11-06) クリニックを選ぶと、タブの件数・上の数字・棒グラフ・赤い知らせもその院だけで数える。件数の見出しに院名を出す
 // 文字はすべて esc() を通して出す（送られた中身にどんな文字があっても画面を壊さない）
 "use strict";
@@ -155,9 +156,16 @@ function render() {
     bars.appendChild(i);
   }
 
+  // 0.3.3: 院を選んでいるとき、院の分からない行（おひさまシステムをまだ引けていない・引けなかった）はどの院にも入らない。
+  //        その数を棒グラフの下に出し、その中の書込失敗は赤い知らせで必ず知らせる（黒ヤギ 11/6 指摘1）
+  const unk = st.clinic ? all.filter((r) => !pi(r) && (st.tab === "all" || tabOf(r) === st.tab) && counted(r)) : [];
+  const unkNg = unk.filter(isFail).length;
+  $("barsLabel").textContent = "8時〜19時の時間ごと" + (unk.length ? `／院の分からない ${unk.length} 件は入っていません` : "");
+  const unkMsg = `院の分からない行に書込失敗が ${unkNg} 件あります（「クリニック：すべて」で見られます）。`;
   const alertBox = $("alertBox");
-  alertBox.classList.toggle("on", ng.length > 0);
-  alertBox.innerHTML = ng.length ? `<span class="big">🚨</span><div><b>書込失敗が ${ng.length} 件あります。</b><br><span class="why">いちばん新しいもの：${esc(hm(ng[0].received_at))}　${esc(SRC[ng[0].route] || "")}　${esc(ng[0].view === "stale" ? "停止の疑い" : reason(ng[0].error_type))}</span></div><button class="go" id="onlyFail" type="button">書込失敗だけ見る</button>` : "";
+  alertBox.classList.toggle("on", ng.length > 0 || unkNg > 0);
+  alertBox.innerHTML = ng.length ? `<span class="big">🚨</span><div><b>書込失敗が ${ng.length} 件あります。</b><br><span class="why">いちばん新しいもの：${esc(hm(ng[0].received_at))}　${esc(SRC[ng[0].route] || "")}　${esc(ng[0].view === "stale" ? "停止の疑い" : reason(ng[0].error_type))}${unkNg ? "<br>ほかに" + esc(unkMsg) : ""}</span></div><button class="go" id="onlyFail" type="button">書込失敗だけ見る</button>`
+    : unkNg ? `<span class="big">🚨</span><div><b>${esc(unkMsg)}</b><br><span class="why">おひさまシステムで患者様を引けていないため、どの院にも入っていません。</span></div><button class="go" id="allClinic" type="button">すべてのクリニックで見る</button>` : "";
 
   // 0.3.2: 選んでいる値は、その日に 1 件も無くても選択欄に残す（表示が「すべて」に戻ったのに中では絞ったまま、を防ぐ）
   const errs = [...new Set(rows.map((r) => r.error_type).concat(st.err).filter(Boolean))].sort();
@@ -295,7 +303,7 @@ async function openDrawer(i) {
 function closeDrawer() { $("drawer").classList.remove("on"); $("shade").classList.remove("on"); }
 
 document.addEventListener("click", (ev) => {
-  const t = ev.target.closest("[data-tab],[data-d],[data-s],[data-open],#onlyFail,#tests,#reload,#close,#shade,[data-stop]");
+  const t = ev.target.closest("[data-tab],[data-d],[data-s],[data-open],#onlyFail,#allClinic,#tests,#reload,#close,#shade,[data-stop]");
   if (!t) return;
   if (t.dataset.stop) return; // カルテを開く（リンク）
   if (t.dataset.tab) { st.tab = t.dataset.tab; render(); return; }
@@ -309,6 +317,7 @@ document.addEventListener("click", (ev) => {
   if (t.dataset.s) { setS(t.dataset.s); return; }
   if (t.dataset.open != null) { openDrawer(+t.dataset.open); return; }
   if (t.id === "onlyFail") { setS("fail"); return; }
+  if (t.id === "allClinic") { st.clinic = ""; setS("fail"); return; }   // 0.3.3: 院の分からない書込失敗を見に行く
   if (t.id === "tests") { st.tests = !st.tests; load(); return; }
   if (t.id === "reload") { load(); return; }
   if (t.id === "close" || t.id === "shade") closeDrawer();

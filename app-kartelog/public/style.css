@@ -16,7 +16,7 @@ header p{margin:6px 0 0;opacity:.9;font-size:14px}
 .pill{background:rgba(255,255,255,.18);border:1px solid rgba(255,255,255,.35);color:#fff;border-radius:999px;padding:7px 14px;font-size:13px}
 button.pill{cursor:pointer;font-family:inherit;font-weight:700}
 /* 0.3.1: ロボットは上の帯の中を走る（タイトルと右上のボタンの間を行ったり来たり・岩城さん「ロボットはしらせて 上の部分で」） */
-.runner{position:absolute;top:4px;left:480px;animation:robot-run 16s ease-in-out infinite}
+.runner{position:absolute;top:4px;left:480px;pointer-events:none;animation:robot-run 16s ease-in-out infinite}
 @keyframes robot-run{0%{left:480px;transform:rotate(-5deg)}46%{left:calc(100% - 340px);transform:rotate(-5deg)}50%{left:calc(100% - 340px);transform:rotate(5deg)}96%{left:480px;transform:rotate(5deg)}100%{left:480px;transform:rotate(-5deg)}}
 .robot{display:block;height:140px;width:auto;filter:drop-shadow(0 6px 10px rgba(0,0,0,.25))}
 /* 0.2.0: ロボットのアニメーション（ふだん＝ふわふわ・書込中＝せっせと揺れる・書込失敗あり＝ときどき震える） */
@@ -110,3 +110,5 @@ h3{font-size:14px;margin:20px 0 6px;color:var(--sub)}
 .shade{position:fixed;inset:0;background:rgba(15,30,60,.25);display:none;z-index:9}.shade.on{display:block}
 .err{background:#fff1f2;color:var(--ng);border-radius:14px;padding:10px 14px;margin-top:12px;display:none}.err.on{display:block}
 @media (max-width:860px){.kpis{grid-template-columns:1fr 1fr}.row{grid-template-columns:60px 1fr}.row>:nth-child(n+3){grid-column:1/-1}.runner{display:none}input[type=search]{min-width:0;width:100%}}
+/* 0.3.3: 960px 以下ではタイトル・右上のボタンとかぶるので走らせない（黒ヤギ 11/6 指摘2） */
+@media (max-width:960px){.runner{display:none}}

@@ -49,5 +49,18 @@ eq("0件の日の件数", els.kAll.textContent, 0);
 st.err = "login"; ctx.__render();
 eq("エラーの種類も選ばれたまま", /value="login" selected/.test(els.err_type.innerHTML), true);
 
+// 0.3.3: 院の分からない行（pinfo が無い・found が false）
+st.err = ""; st.s = "all";
+st.rows = [row("垂水", "ok", "09"), row(null, "fail", "10"), { ...row(null, "running", "11"), pinfo: undefined }];
+st.clinic = "垂水"; ctx.__render();
+eq("院の分からない行は院の数に入らない", els.kAll.textContent, 1);
+eq("院の分からない件数を出す", el("barsLabel").textContent, "8時〜19時の時間ごと／院の分からない 2 件は入っていません");
+eq("院の分からない書込失敗で赤い知らせ", els.alertBox.classList.contains("on"), true);
+eq("すべてのクリニックへのボタン", els.alertBox.innerHTML.includes('id="allClinic"'), true);
+st.rows.push(row("垂水", "fail", "12")); ctx.__render();
+eq("院の失敗とあわせて書く", /書込失敗が 1 件[\s\S]*ほかに院の分からない行に書込失敗が 1 件/.test(els.alertBox.innerHTML), true);
+st.clinic = ""; ctx.__render();
+eq("すべてのときは注意書きなし", el("barsLabel").textContent, "8時〜19時の時間ごと");
+
 console.log(bad ?`FAIL ${bad}` : "ALL OK");
 process.exit(bad ? 1 : 0);
