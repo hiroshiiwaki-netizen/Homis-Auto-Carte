@@ -1,6 +1,6 @@
 // 実行リストの service worker（0.1.0）。画面の部品だけ手元に持つ。データ（/api/）は毎回読む・持たない（仕様 6章）
-const CACHE = "kartelog-0.1.2";
-const SHELL = ["/kartelog/", "/kartelog/style.css", "/kartelog/app.js", "/kartelog/icon.svg", "/kartelog/robot.svg", "/kartelog/manifest.webmanifest"];
+const CACHE = "kartelog-0.1.3";
+const SHELL = ["/kartelog/", "/kartelog/style.css", "/kartelog/app.js", "/kartelog/icon.svg", "/kartelog/robot.png", "/kartelog/icon-192.png", "/kartelog/manifest.webmanifest"];
 self.addEventListener("install", (e) => { e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting())); });
 self.addEventListener("activate", (e) => {
   e.waitUntil(caches.keys().then((ks) => Promise.all(ks.filter((k) => k !== CACHE).map((k) => caches.delete(k)))).then(() => self.clients.claim()));

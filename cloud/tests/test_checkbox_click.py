@@ -161,6 +161,74 @@ class CheckboxClick(unittest.TestCase):
         self.assertEqual(self.orca(), 1)
 
 
+class CheckboxUncheck(CheckboxClick):
+    """v1.5.0: verify_unchecked（問い合わせ・疑義照会の「算定不要が付いていれば外す」）。CheckboxClick の画面と道具を借りる"""
+
+    def setUp(self):
+        for n in [m for m in dir(CheckboxClick) if m.startswith("test_")]:   # 借りたテストはここでは流さない
+            if getattr(type(self), n) is getattr(CheckboxClick, n) and self._testMethodName == n:
+                self.skipTest("CheckboxClick で流す")
+
+    def off(self, selector="#NoNeedToOrca"):
+        a = {"name": "算定不要が付いていれば外す", "action": "click", "selector": selector, "verify_unchecked": True}
+        return self.actions.execute_action(a, {})
+
+    def test_u1_not_checked_is_left_alone(self):
+        self.open("none")
+        self.assertTrue(self.off())
+        self.assertFalse(self.checked())
+        self.assertEqual(self.orca(), 0)          # 押していない（ふだんはこれ）
+
+    def test_u2_checked_is_unchecked_and_runs_onclick(self):
+        self.open("none", pre=1)
+        self.assertTrue(self.off())
+        self.assertFalse(self.checked())
+        self.assertEqual(self.orca(), 1)          # 普通のクリックで外した（onclick も動いた）
+
+    def test_u3_checked_under_cover_js_click(self):
+        self.open("forever", pre=1)
+        self.assertTrue(self.off())
+        self.assertFalse(self.checked())
+
+    def test_u4_fails_when_mark_does_not_go(self):
+        # 押しても印が残る作り（revert は印を外すので、pre＋押すと戻らない作りを JS で作る）
+        self.open("none", pre=1)
+        self.driver.execute_script("window.setNoNeedToOrca = function(){ document.getElementById('NoNeedToOrca').checked = true; };"
+                                   "document.getElementById('NoNeedToOrca').onclick = function(){ this.checked = true; };")
+        self.assertFalse(self.off())
+
+    def test_u5_missing_box_is_not_failure(self):
+        import time
+        self.open("none")
+        t0 = time.time()
+        self.assertTrue(self.off(selector="#NoSuchBox"))   # 箱が無ければ外すものも無い
+        self.assertLess(time.time() - t0, 6)               # 3 秒で見切る
+
+    def test_u6_checked_wins_over_hidden_duplicate(self):
+        self.open("none", dup=1, pre=1)
+        self.assertTrue(self.off())
+        self.assertFalse(self.driver.execute_script("return document.querySelector('label #NoNeedToOrca').checked"))
+
+
+class BotTemplate(unittest.TestCase):
+    """bot_s_interrupt.yaml 1.3: 医科カルテのあと・S の前に「算定不要が付いていれば外す」。付ける手順は無い"""
+
+    def test_bot_template_unchecks_not_checks(self):
+        with open(os.path.join(SRC, "templates", "bot_s_interrupt.yaml"), encoding="utf-8") as f:
+            tpl = yaml.safe_load(f)
+        names = [s["name"] for s in tpl["steps"]]
+        self.assertEqual(tpl["version"], "1.3")
+        i = names.index("算定不要が付いていれば外す")
+        self.assertLess(names.index("医科カルテボタンをクリック"), i)
+        self.assertLess(i, names.index("S欄に入力"))
+        step = tpl["steps"][i]
+        self.assertEqual(step["selector"], "#NoNeedToOrca")
+        self.assertTrue(step.get("verify_unchecked"))
+        self.assertFalse(step.get("verify_checked"))
+        self.assertFalse(step.get("stop_on_fail"))       # 外せなくても保存は止めない（読み直しと DX の知らせで気づく）
+        self.assertFalse(any(s.get("verify_checked") and s.get("selector") == "#NoNeedToOrca" for s in tpl["steps"]))
+
+
 class FaxSoFlow(unittest.TestCase):
     """結合: 本物の型紙 fax_so.yaml の手順を、本物の BrowserActions で順番どおりに通す"""
 

@@ -9,13 +9,13 @@ body{margin:0;font-family:"BIZ UDPGothic","BIZ UDPゴシック",sans-serif;color
 body::before{content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;
   background:radial-gradient(600px 300px at 90% 10%,rgba(37,99,235,.10),transparent 70%),
              radial-gradient(500px 300px at 5% 80%,rgba(14,165,164,.10),transparent 70%)}
-header{background:linear-gradient(120deg,#1d4ed8 0%,#0ea5a4 100%);color:#fff;padding:22px 28px 104px;position:relative;overflow:hidden}
+header{background:linear-gradient(120deg,#1d4ed8 0%,#0ea5a4 100%);color:#fff;padding:22px 28px 122px;position:relative;overflow:hidden}
 header h1{margin:0;font-size:26px;letter-spacing:.04em}
 header p{margin:6px 0 0;opacity:.9;font-size:14px}
 .hd-right{position:absolute;right:28px;top:22px;display:flex;gap:10px;align-items:center}
 .pill{background:rgba(255,255,255,.18);border:1px solid rgba(255,255,255,.35);color:#fff;border-radius:999px;padding:7px 14px;font-size:13px}
 button.pill{cursor:pointer;font-family:inherit;font-weight:700}
-.robot{position:absolute;right:300px;top:6px;height:108px;width:auto;filter:drop-shadow(0 6px 10px rgba(0,0,0,.25))}
+.robot{position:absolute;right:300px;top:4px;height:140px;width:auto;filter:drop-shadow(0 6px 10px rgba(0,0,0,.25))}
 .wrap{position:relative;z-index:1;max-width:1180px;margin:-52px auto 40px;padding:0 20px}
 .tabs{display:flex;gap:8px;background:var(--card);padding:8px;border-radius:20px;box-shadow:0 8px 24px rgba(15,40,80,.08);flex-wrap:wrap}
 .tab{flex:1;min-width:150px;border:0;background:transparent;border-radius:14px;padding:12px 10px;font-family:inherit;font-size:15px;font-weight:700;color:var(--sub);cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px}

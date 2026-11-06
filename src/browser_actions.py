@@ -4,9 +4,12 @@
 ======================
 YAMLテンプレートで指定されたアクションを実行
 
-バージョン: 1.4.0
-最終更新: 2026/11/04
+バージョン: 1.5.0
+最終更新: 2026/11/06
 改定履歴（新しい順・全体は docs/SPEC_v3_cloud.md 0章「モジュール別の版」）:
+  v1.5.0 11/06 id などで探して押す click に verify_unchecked を足した（問い合わせ・疑義照会の「算定不要」を外す守り）。
+               印が無ければ押さない・付いていれば普通のクリックで外し、外れたかを確かめる。箱が 3 秒待っても無ければ外すものも無いので何もしない。
+               verify_checked・verify_unchecked が無い click は今までと同じ（DX担当 11/6「もし仮についてたら外す」）
   v1.4.0 11/04 js_input に verify_value を足した。見えている欄が出るまで最大10秒待って入れ、0.5秒おいて読み返し、
                違えば入れ直す。入らなければ手順の失敗。見えない欄には入れない。verify_value が無い js_input は今までと同じ。
                改行は \r\n も \r 単体も \n にそろえて比べる（黒ヤギ 11/4 指摘1）
@@ -72,6 +75,9 @@ class BrowserActions:
                 elif action.get("verify_checked"):
                     # v1.3.0: id などで探して押し、印が付いたかを確かめる（算定不要のチェック）
                     self._click_checkbox_safely(selector, selector_type)
+                elif action.get("verify_unchecked"):
+                    # v1.5.0: 印が付いていたら外し、外れたかを確かめる（問い合わせ・疑義照会の算定不要）
+                    self._click_checkbox_safely(selector, selector_type, timeout_sec=3.0, want_checked=False)
                 else:
                     self._action_click(selector, selector_type, text_contains)
             elif action_type == "input":
@@ -262,8 +268,9 @@ class BrowserActions:
         return found[0] if found else None
 
     def _click_checkbox_safely(self, selector: str, selector_type: str = "css",
-                               timeout_sec: float = 10.0, interval_sec: float = 0.5):
+                               timeout_sec: float = 10.0, interval_sec: float = 0.5, want_checked: bool = True):
         """
+        v1.5.0: want_checked=False なら逆（印を外す）。箱が見つからなければ外すものも無いので何もしない。
         チェックの箱を、印が付いた状態にする。人と同じ普通のクリックで押す（onclick も動く）。値を直接書き換えない。
         ・押す前から印が付いていれば押さない（押すと外れるため）
         ・押せるまで待って押し直し、だめなら JavaScript で押す（element.click() なので onclick も動く）
@@ -276,7 +283,7 @@ class BrowserActions:
             elem = self._find_one(selector, selector_type)
             if elem is not None:
                 try:
-                    if self.driver.execute_script(self._JS_IS_CHECKED, elem) is True:
+                    if (self.driver.execute_script(self._JS_IS_CHECKED, elem) is True) == want_checked:
                         how = "already"
                         break
                     elem.click()
@@ -291,15 +298,18 @@ class BrowserActions:
             time.sleep(interval_sec)
         if not how:
             if elem is None:
+                if not want_checked:
+                    logger.info(f"'{selector}' が無いので外すものも無い")
+                    return
                 raise Exception(f"'{selector}' が見つかりません")
             self.driver.execute_script(self._JS_CLICK, elem)
             how = "js"
             logger.warning(f"'{selector}' を JavaScript で押した（かぶさり: {self._blocker(elem)}）")
         time.sleep(0.3)
         checked = self.driver.execute_script(self._JS_IS_CHECKED, elem)
-        if checked is not True:
-            raise Exception(f"'{selector}' に印が付いていない（{how}・checked={checked}）")
-        logger.info(f"'{selector}' に印を付けた（{how}）")
+        if (checked is True) != want_checked:
+            raise Exception(f"'{selector}' の印が{'付いていない' if want_checked else '外れていない'}（{how}・checked={checked}）")
+        logger.info(f"'{selector}' の印を{'付けた' if want_checked else '外した'}（{how}）")
 
     def _action_input(self, selector: str, value: str, trigger_event: bool = False, selector_type: str = "css"):
         """入力アクション"""

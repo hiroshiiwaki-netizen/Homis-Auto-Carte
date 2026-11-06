@@ -2,6 +2,8 @@
 # 仕様: docs/SPEC_v3_cloud.md §12
 # 失敗・二重防止は §7 / 2b。このファイルは手順だけ。
 # 改定履歴（新しい順・全体は docs/SPEC_v3_cloud.md 0章「モジュール別の版」）:
+#   1.3 2026/11/06 「算定不要が付いていれば外す」を足した（verify_unchecked・browser_actions 1.5.0）。問い合わせ・疑義照会は算定できるものも
+#                  あるので ORCA登録不要にしない。新規では付いていないのでふだんは何もしない（DX担当 11/6「もし仮についてたら外す」）
 #   1.2 2026/11/04 S の2手順に stop_on_fail（確かめられなければ保存しない・ライター cloud/server.py 3.6.0 が1回やり直す。
 #                  DX担当「問い合わせで S 欄が空はあかん」）
 #   1.1 2026/11/04 「電話再診を選択」に verify_checked（FAX と同じ）。S の入力に verify_value（見える欄を待つ・読み返す）。
@@ -10,7 +12,7 @@
 
 name: おひさまボットS中断
 description: おひさまボット確認後のカルテ（電話再診・Sのみ・中断）
-version: "1.2"
+version: "1.3"
 
 target_url: "https://homis.jp/homic/?pid=patient_detail&patient_id={homisId}&p=5"
 
@@ -36,6 +38,12 @@ steps:
     selector_type: xpath
     selector: "//a[contains(text(), '医科カルテ')]"
     wait_after: 3000
+
+  - name: 算定不要が付いていれば外す
+    action: click
+    selector: "#NoNeedToOrca"
+    verify_unchecked: true   # 1.3: 印が無ければ押さない・付いていれば外して確かめる（FAX の fax_so は付ける・こちらは付けない）
+    wait_after: 500
 
   - name: S欄に入力
     action: js_input
