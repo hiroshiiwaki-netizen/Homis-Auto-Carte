@@ -1,9 +1,10 @@
 // main.go — カルテライターの実行リスト（app.nhw.jp/kartelog/・PWA）
 //
-// 版: 0.2.0
+// 版: 0.2.1
 // 最終更新: 2026-11-06
 // 改定履歴:
 //
+//	0.2.1 (2026-11-06) タブの名前を「OhiScanGo（FAX/SCAN）」「問い合わせ（コール受付分）」「疑義照会（Tukusiフォームから）」に（岩城さん「OhiscanGO って誰もわからない」）
 //	0.2.0 (2026-11-06) 所属クリニック・ORCA番号・患者名をおひさまシステム（FM の API_M_PATIENT_LINKINFO を homisID 完全一致）から引いて出す（patient.go・仕様 v0.8 13章）。
 //	                   一覧は FM を待たず、裏の係が引いて覚える。FM_HOST 等が無ければ今まで通り患者番号だけ
 //	0.1.3 (2026-11-06) ロボットを Antigravity が描いた絵（robot.png・アイコン icon-192/512.png）に替え、大きく（岩城さん「もう少し大きく」「Antigravity に」）
@@ -31,7 +32,7 @@ import (
 	"time"
 )
 
-const version = "0.2.0"
+const version = "0.2.1"
 
 //go:embed public/*
 var staticFS embed.FS

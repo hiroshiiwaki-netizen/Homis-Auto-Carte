@@ -4,7 +4,7 @@
 
 const API = "/kartelog/api/";
 const TABS = [
-  ["all", "🗂️ 全記録", "all"], ["fax", "📠 OhiScanGo", "fax"], ["bot", "💬 問い合わせ", "bot"], ["bot_g", "💊 疑義照会", "gi"],
+  ["all", "🗂️ 全記録", "all"], ["fax", "📠 OhiScanGo（FAX/SCAN）", "fax"], ["bot", "💬 問い合わせ（コール受付分）", "bot"], ["bot_g", "💊 疑義照会（Tukusiフォームから）", "gi"],
 ];
 const SRC = { fax: "📠 OhiScanGo", bot: "💬 問い合わせ", bot_g: "💊 疑義照会", fax_mirror: "🧪 FAX 試し書き", bot_test: "🧪 問い合わせ 試験", karte_json: "🎙️ 音声カルテ", other: "その他" };
 // 失敗の理由（ライター server.py の FIELD_REASON・受け口の理由と同じ言葉）
@@ -119,7 +119,7 @@ function render() {
   const counts = { all: rows.length };
   for (const r of rows) counts[tabOf(r)] = (counts[tabOf(r)] || 0) + 1;
   $("tabs").innerHTML = TABS.map(([k, label, dot]) => `<button class="tab ${st.tab === k ? "on" : ""}" data-tab="${k}" type="button"><span class="dot ${dot}"></span>${label}<span class="n">${counts[k] || 0}</span></button>`).join("")
-    + `<button class="tab off" type="button" title="共通 JSON の入口ができたら"><span class="dot kj"></span>🎙️ 音声カルテ<span class="n">準備中</span></button>`;
+    + `<button class="tab off" type="button" title="音声カルテ（準備中・共通 JSON の入口ができたら）"><span class="dot kj"></span>🎙️ 音声カルテ</button>`;
 
   const base = rows.filter((r) => st.tab === "all" || tabOf(r) === st.tab);
   const ok = base.filter((r) => r.view === "ok").length;
