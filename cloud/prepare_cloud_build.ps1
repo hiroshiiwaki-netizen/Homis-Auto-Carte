@@ -30,6 +30,7 @@ $files = @(
   @{ From = (Join-Path $src "templates\xray_karte.yaml"); To = (Join-Path $dst "templates\xray_karte.yaml") }
   @{ From = (Join-Path $src "templates\fax_so.yaml"); To = (Join-Path $dst "templates\fax_so.yaml") }
   @{ From = (Join-Path $src "templates\bot_s_interrupt.yaml"); To = (Join-Path $dst "templates\bot_s_interrupt.yaml") }
+  @{ From = (Join-Path $src "templates\karte_edit.yaml"); To = (Join-Path $dst "templates\karte_edit.yaml") }
 )
 foreach ($f in $files) {
   if (-not (Test-Path -LiteralPath $f.From)) { throw "missing: $($f.From)" }

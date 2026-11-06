@@ -1,9 +1,12 @@
 # -*- coding: utf-8 -*-
 """書込失敗の自動やり直し（仕様 docs/SPEC_実行リスト_v0.md v1.2 14章・黒ヤギ 仕様3回【進めてよい】）
 
-版: 1.0.0
+版: 1.1.0
 最終更新: 2026-11-06
 改定履歴:
+  v1.1.0 11/06 共通 JSON の入口 ①先生が選んだカルテに書く（型紙 karte_edit・注文番号 KE-）もやり直す（仕様 SPEC_共通JSON入口_v0.md 7章）。
+               列は RETRY_QUEUE_KARTE。書く前にカルテを読めなかった（karte_unreadable）もやり直してよい失敗に足す（HOMIS には何も残っていない）。
+               人が書いたかは、①ではカルテ番号が増えないので、カルテの最終更新日時・更新者の控え（baseline_upd・ライター側）で見る
   v1.0.0 11/06 新規。やり直してよい失敗の判定・注文番号の回数（-A1〜-A3）・同じ列への予約つきの投入・人が書いた見込みの守り（カルテ一覧の番号）。
                RETRY_MODE が on でなければ何もしない（配置しても今まで通り）。
 
@@ -30,12 +33,12 @@ import verify_karte
 
 logger = logging.getLogger("auto_retry")
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 MAX_ATTEMPTS = 3
 DELAYS_SEC = {1: 5 * 60, 2: 15 * 60, 3: 30 * 60}   # -A1 は 5 分後・-A2 は 15 分後・-A3 は 30 分後
 RETRYABLE_ERRORS = {"locked:busy", "locked:error", "blocked:in_progress_karte", "blocked:unexpected_alert",
-                    "login", "chrome", "timeout"}
-RETRY_TEMPLATES = {"fax_so", "bot_s_interrupt"}
+                    "login", "chrome", "timeout", "karte_unreadable"}
+RETRY_TEMPLATES = {"fax_so", "bot_s_interrupt", "karte_edit"}
 ATTEMPT_RE = re.compile(r"^(.*)-A([1-3])$")
 POST_TIMEOUT = 5.0
 DISPATCH_DEADLINE = "900s"   # 受け口と同じ
@@ -65,7 +68,7 @@ def is_live_or_test(order_id: str) -> bool:
     o = split_attempt(order_id)[0]
     if o.startswith("FAX-MIRROR-"):
         return False
-    return o.startswith("FAX-") or o.startswith("BOT-")   # BOT-G-・BOT-TEST- を含む
+    return o.startswith("FAX-") or o.startswith("BOT-") or o.startswith("KE-")   # BOT-G-・BOT-TEST-・KE-TEST- を含む
 
 
 def eligible(template: str, order_id: str, err: str, left: str) -> bool:
@@ -80,7 +83,7 @@ def eligible(template: str, order_id: str, err: str, left: str) -> bool:
 
 
 def queue_for(template: str) -> str:
-    name = "RETRY_QUEUE_FAX" if template == "fax_so" else "RETRY_QUEUE_BOT"
+    name = {"fax_so": "RETRY_QUEUE_FAX", "karte_edit": "RETRY_QUEUE_KARTE"}.get(template, "RETRY_QUEUE_BOT")
     return os.environ.get(name, "").strip().strip("/")
 
 

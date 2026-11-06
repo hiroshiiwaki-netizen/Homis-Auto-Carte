@@ -1,0 +1,142 @@
+# 共通 JSON の入口 ①先生が選んだカルテに書く（音声カルテ・上書き・中断）
+# 仕様: docs/FAXカルテ_検討/SPEC_共通JSON入口_v0.md v1.0 5章・14章
+# 書く前の確かめ（患者・完了・取消・診察日）と保存直前の確かめはライター cloud/server.py 3.13.0 がする。このファイルは手順だけ。
+# 画面の部品は Tukusi のキャプチャ「HOMIS最新カルテ全項目入力中断」と HomisApi の HomisWriter.js 501〜533 行で一致を確認（仕様 1章）。
+# 改定履歴（新しい順・全体は docs/SPEC_v3_cloud.md 0章「モジュール別の版」）:
+#   1.0 2026/11/06 初版。skip_if_empty（空なら触らない）・check_before_save（保存の直前に人が保存していないか）はクラウドのライターだけが読む
+
+name: 先生が選んだカルテに書く
+description: 音声カルテ（先生が選んだ今のカルテを編集し、各欄を上書きして中断で保存）
+version: "1.0"
+
+target_url: "https://homis.jp/homic/?pid=patient_detail&patient_id={homisId}&karte_id={karteId}&p=5"
+
+auth:
+  type: homis
+  detect_login: true
+
+steps:
+  - name: 編集ボタンをクリック
+    action: click
+    selector: "#karteEdit"
+    stop_on_fail: true     # 編集が開かなければ何も入れない
+    wait_after: 3000
+
+  - name: 開始時刻を入れる
+    action: js_input
+    selector: "input#start_time"
+    value: "{start_time}"
+    skip_if_empty: start_time   # 空なら触らない（仕様 3章）
+    verify_value: true          # 消してから入れる＝値をそのまま置き換え、読み返す（仕様 14章）
+    wait_after: 300
+
+  - name: 終了時刻を入れる
+    action: js_input
+    selector: "input#end_time"
+    value: "{end_time}"
+    skip_if_empty: end_time
+    verify_value: true
+    wait_after: 300
+
+  - name: S欄に入力
+    action: js_input
+    selector: "textarea#subjective"
+    value: "{soap_s}"
+    verify_value: true
+    stop_on_fail: true
+    wait_after: 500
+
+  - name: O欄に入力
+    action: js_input
+    selector: "textarea#objective"
+    value: "{soap_o}"
+    verify_value: true
+    stop_on_fail: true
+    wait_after: 500
+
+  - name: A/P Summaryに入力
+    action: js_input
+    selector: "textarea#ap"
+    value: "{soap_ap_summary}"
+    verify_value: true
+    wait_after: 300
+
+  - name: A/P Temporaryに入力
+    action: js_input
+    selector: "textarea#ap_today"
+    value: "{soap_ap_temporary}"
+    verify_value: true
+    wait_after: 300
+
+  - name: 指導事項に入力
+    action: js_input
+    selector: "textarea#report"
+    value: "{instruction}"
+    verify_value: true
+    wait_after: 300
+
+  - name: 体温を入れる
+    action: js_input
+    selector: "input#bt"
+    value: "{vital_bt}"
+    skip_if_empty: vital_bt
+    verify_value: true
+    wait_after: 200
+
+  - name: 血圧（上）を入れる
+    action: js_input
+    selector: "input#bp_h"
+    value: "{vital_bp_h}"
+    skip_if_empty: vital_bp_h
+    verify_value: true
+    wait_after: 200
+
+  - name: 血圧（下）を入れる
+    action: js_input
+    selector: "input#bp_l"
+    value: "{vital_bp_l}"
+    skip_if_empty: vital_bp_l
+    verify_value: true
+    wait_after: 200
+
+  - name: 脈拍を入れる
+    action: js_input
+    selector: "input#pr"
+    value: "{vital_pr}"
+    skip_if_empty: vital_pr
+    verify_value: true
+    wait_after: 200
+
+  - name: SpO2を入れる
+    action: js_input
+    selector: "input#o2"
+    value: "{vital_spo2}"
+    skip_if_empty: vital_spo2
+    verify_value: true
+    wait_after: 500
+
+  - name: S欄をもう一度確かめる
+    action: js_input
+    selector: "textarea#subjective"
+    value: "{soap_s}"
+    verify_value: true
+    stop_on_fail: true
+    wait_after: 500
+
+  - name: 中断ボタンで保存
+    action: click
+    selector: "#karteInterruption"
+    check_before_save: true   # 保存の直前に、書く前の控えから人が保存していないかを見る（仕様 5章 3b）
+    confirm_alert_count: 2
+    wait_after: 5000
+
+on_complete:
+  - name: リンクをコピー
+    action: click
+    selector_type: xpath
+    selector: "//a[contains(@onclick, 'copyLinkOfKarte')]"
+    wait_after: 1000
+
+result:
+  type: clipboard
+  description: カルテURL

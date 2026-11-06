@@ -2,9 +2,16 @@
 """Cloud Run 受け口（フェーズ2a＋失敗ガード）
 
 ==============================================================================
-バージョン: 3.12.0
+バージョン: 3.13.0
 最終更新: 2026/11/06
 改定履歴（新しい順・全体は docs/SPEC_v3_cloud.md 0章「モジュール別の版」）:
+  v3.13.0 11/06 共通 JSON の入口 ①先生が選んだカルテに書く（型紙 karte_edit・注文番号 KE-・仕様 docs/FAXカルテ_検討/SPEC_共通JSON入口_v0.md v1.0）。
+               今の3つの型紙（xray_karte・fax_so・bot_s_interrupt）の書き方（_write_locked）は通らない別の関数 _write_edit_locked で書く。
+               札を取ったあと karte_guard で書く前に確かめ（患者・完了・取消・診察日が今日か昨日）、最終更新日時・更新者を控える。
+               自動やり直し（-A1〜）は控えから人が書いていれば止める（skipped:human_edited）。保存の直前にもう一度読み、人が保存していれば保存しない
+               （skipped:human_saved_during・編集中が残る）。空の時刻・バイタルは触らない（skip_if_empty）。空の文の欄は全角スペース。
+               止まった後の新規での取り直し・入力途中の90秒やり直し・前の書きかけの守りは使わない（新規の守りのため）。読み直しは中断で（O は見ない）。
+               知らせは DX の Chat だけ（送った先生・理由・直リンク・注文番号）。現場用 KARTE_FIELD_WEBHOOK はまだ無い
   v3.12.0 11/06 書込失敗の自動やり直し（auto_retry.py 1.0.0・RETRY_MODE=on のときだけ・仕様 docs/SPEC_実行リスト_v0.md v1.2 14章）。
                HOMIS に何も残っていない失敗（locked・入力途中・知らせ・ログイン等）だけ、同じ列に -A1（5分後）・-A2（15分後）・-A3（30分後）を予約で入れる。
                最初の失敗でカルテ一覧の一番大きい番号を控え（札を外す前）、やり直しの前に控えより新しいカルテがあれば書かずに止める（人が書いた見込み）。
@@ -105,6 +112,7 @@ from selenium.webdriver.chrome.service import Service
 import navi_callback
 import patient_lock
 import auto_retry
+import karte_guard
 import run_record
 import verify_karte
 from browser_actions import BrowserActions
@@ -122,7 +130,7 @@ logger = logging.getLogger("homis_writer")
 CHROME_BIN = os.environ.get("CHROME_BIN", "/usr/bin/chromium")
 CHROMEDRIVER = os.environ.get("CHROMEDRIVER", "/usr/bin/chromedriver")
 BEFORE_NEW = {"chrome", "login", "timeout"}
-ALLOWED_TEMPLATES = {"xray_karte", "fax_so", "bot_s_interrupt"}
+ALLOWED_TEMPLATES = {"xray_karte", "fax_so", "bot_s_interrupt", "karte_edit"}
 WRITE_LOCK = threading.Lock()
 _TLS = threading.local()
 
@@ -200,6 +208,16 @@ FIELD_REASON = {
     # v3.12.0: 自動やり直し
     "skipped:new_karte_found": "自動やり直しの前に、新しいカルテが見つかりました（人が書いた見込み）",
     "skipped:karte_list_unreadable": "自動やり直しの前に、カルテ一覧を読めませんでした",
+    # v3.13.0: 共通 JSON の入口 ①先生が選んだカルテに書く
+    "karte_not_found": "選ばれたカルテが見つかりませんでした",
+    "karte_other_patient": "選ばれたカルテが、送られた患者様のものではありませんでした",
+    "karte_cancelled": "選ばれたカルテは取り消されています",
+    "karte_completed": "選ばれたカルテはもう完了しているため、書きませんでした",
+    "karte_too_old": "選ばれたカルテの診察日が今日・昨日ではないため、書きませんでした",
+    "karte_unreadable": "書く前に、選ばれたカルテを読めませんでした（安全のため書いていません）",
+    "skipped:human_edited": "自動やり直しの前に、カルテが人の手で書き換えられていました（人が書いた見込み）",
+    "skipped:human_saved_during": "書いている間に、同じカルテを人が保存したため、保存せずに止めました",
+    "blocked:presave_unreadable": "保存の直前にカルテを読み直せなかったため、保存せずに止めました",
 }
 
 
@@ -226,6 +244,7 @@ def _reset_opened():
     _TLS.new_pressed_at = None   # v3.7.0: 新規を押した時刻（日本時間・tz なし）
     _TLS.edit_checked = False    # v3.7.0: この回で書きかけの守りを見たか
     _TLS.current_kid = ""        # v3.7.0: この回で開いたカルテの番号（編集画面から）
+    _TLS.edit_mode = False       # v3.13.0: karte_edit を書いている間だけ True
 
 
 def _start_order():
@@ -356,6 +375,17 @@ def _execute_cloud(self, action, data):
     if _blocked() or _stopped():
         logger.info("止めているため手順を飛ばす: %s", action.get("name", "") if isinstance(action, dict) else "")
         return False
+    if isinstance(action, dict) and action.get("skip_if_empty") and not str(data.get(action["skip_if_empty"]) or "").strip():
+        # v3.13.0: 空なら触らない（karte_edit の時刻・バイタル。今のカルテの値を残す）
+        logger.info("空なので触らない: %s", action.get("name", ""))
+        return True
+    if isinstance(action, dict) and action.get("check_before_save") and getattr(_TLS, "edit_mode", False):
+        # v3.13.0: 保存の直前に、書く前の控えから人が保存していないかを見る（仕様 5章 3b）
+        why = _edit_presave_check()
+        if why:
+            _TLS.blocked = why
+            logger.warning("保存の直前の確かめで止める: %s", why)
+            return False
     if (isinstance(action, dict) and action.get("action") in GUARD_BEFORE_ACTIONS and _opened()
             and not getattr(_TLS, "edit_checked", False)):
         # v3.7.0: 最初の入力の前に、前の書きかけが戻っていないかを見る（3型紙とも医科カルテのあと）。
@@ -396,6 +426,14 @@ def _click_cloud(self, selector, selector_type="css", text_contains=""):
         self.driver.execute_script("window.confirm=()=>true; window.alert=()=>{};")
         logger.info("保存前にアラート自動OKを設定")
     out = _orig_click(self, selector, selector_type, text_contains)
+    if selector == "#karteEdit":
+        # v3.13.0: 先生が選んだカルテの編集を開いた。新規の守り（前の書きかけ）は使わない
+        kid = str(getattr(_TLS, "edit_kid", "") or "")
+        _TLS.karte_opened = True
+        _TLS.edit_checked = True
+        _TLS.current_kid = kid
+        _note_kid(kid)
+        logger.info("karte_opened=1（編集） karte_id=%s", kid or "-")
     if selector == "#karteNew":
         _TLS.new_pressed_at = _now_jst()   # v3.7.0: 書きかけの守りで比べる相手
         _TLS.karte_opened = True
@@ -633,7 +671,8 @@ def _write_karte_inner(data: dict, order_id: str, homis_id: str) -> dict:
             return result_from_row(claimed, order_id)
         sheet_row = int(claimed.get("row") or 0)
     _record_accepted(data, order_id, homis_id)   # v3.11.0: 実行リスト（置き場が無ければ何もしない）
-    if auto_retry.split_attempt(order_id)[1] >= 1:
+    if auto_retry.split_attempt(order_id)[1] >= 1 and _template_name(data) != EDIT_TEMPLATE:
+        # v3.13.0: karte_edit はカルテ番号が増えないので、ここではなく _write_edit_locked で控えの更新日時を見る
         # v3.12.0: 自動やり直し（-A1〜-A3）は書く前に、控えより新しいカルテが無いか見る（人が書いた見込み・仕様 14.2b）。
         # RETRY_MODE を切ったあとに列に残っていた分も、安全のため同じように見る
         stop, now_id = auto_retry.human_wrote(homis_id, data.get("baseline_karte_id"))
@@ -652,13 +691,136 @@ def _write_karte_inner(data: dict, order_id: str, homis_id: str) -> dict:
     _TLS.lock = (homis_id, lock["generation"])
     _TLS.keep_lock = False
     try:
-        res = _write_locked(data, order_id, homis_id, t0, time.time(), sheet_row, lock)
+        if _template_name(data) == EDIT_TEMPLATE:
+            res = _write_edit_locked(data, order_id, homis_id, t0, sheet_row, lock)   # v3.13.0: 今の型紙の書き方は通らない
+        else:
+            res = _write_locked(data, order_id, homis_id, t0, time.time(), sheet_row, lock)
         _note_baseline(data, order_id, homis_id, res)   # v3.12.0: 控えは札を外す前に取る（黒ヤギ 仕様3回目 指摘3）
     finally:
         _release_lock(order_id)
     _record_finished(data, order_id, res)
     _schedule_retry(data, order_id, homis_id, res)   # v3.12.0: やってよい失敗なら次を予約で入れる
     return res
+
+
+# ---------- v3.13.0: 共通 JSON の入口 ①先生が選んだカルテに書く（型紙 karte_edit・仕様 SPEC_共通JSON入口_v0.md v1.0） ----------
+EDIT_TEMPLATE = "karte_edit"
+EDIT_TEXT_FIELDS = ("soap_s", "soap_o", "soap_ap_summary", "soap_ap_temporary", "instruction")
+EDIT_BLANK = "\u3000"   # 空の文の欄は全角スペース（HomisApi と同じ・仕様 3章）
+
+
+def edit_fill(data: dict) -> dict:
+    """karte_edit に入れる値。空の文の欄は全角スペース・O は HOMIS の上限で区切る・読み直し用に sContent/oContent をそろえる"""
+    out = dict(data)
+    for k in EDIT_TEXT_FIELDS:
+        if not str(out.get(k) or "").strip():
+            out[k] = EDIT_BLANK
+    cut, cut_from = cut_o_for_homis(str(out["soap_o"]))
+    if cut_from:
+        out["soap_o"] = cut
+        logger.info("O を区切った orderId=%s 元=%sバイト", out.get("orderId"), cut_from)
+    out["sContent"], out["oContent"] = out["soap_s"], out["soap_o"]
+    return out
+
+
+def _edit_presave_check() -> str:
+    """保存の直前の確かめ。人が保存していれば・読めなければ止める理由（空なら保存してよい）"""
+    now = karte_guard.read(str(getattr(_TLS, "edit_homis", "") or ""), str(getattr(_TLS, "edit_kid", "") or ""))
+    if now is None:
+        return "presave_unreadable"
+    if karte_guard.human_changed(getattr(_TLS, "edit_baseline", None), now):
+        return "human_saved_during"
+    return ""
+
+
+def edit_outcome(result: dict, opened: bool, blocked: str, stopped: str, err: str) -> tuple[bool, str, str]:
+    """書き終わりの見立て。返り値（成功か・error_type・left_in_homis）。
+    編集を開いたあとに止まった・失敗した＝そのカルテが編集中のまま残る見込み（editing・仕様 7章）"""
+    if blocked:
+        return False, ("skipped:" + blocked if blocked == "human_saved_during" else "blocked:" + blocked), "editing"
+    if stopped:
+        if opened:
+            return False, "stopped:unverified_input", "editing"
+        return False, err or ("step:" + stopped), "none"   # 編集ボタンが押せなかった（何も開いていない）
+    if not result.get("success"):
+        return False, err or ("opened_then_fail" if opened else "unknown"), ("editing" if opened else "none")
+    return True, ("" if err == "no_karte_id" else err), "saved"   # カルテ番号は送られてきたもの（リンクが取れなくてもよい）
+
+
+def _edit_notify_dx(data: dict, order_id: str, homis_id: str, kid: str, err: str, left: str, extra: str = "") -> None:
+    why = FIELD_REASON.get(err, err or "理由不明")
+    text = (f"HOMIS ライター（GCP）: 音声カルテ（先生のカルテ）を書けませんでした（{why}）。"
+            + ("そのカルテが編集中のまま残っています。HOMIS で開いて確かめてください。" if left == "editing" else "")
+            + extra
+            + f"\n送った人 {data.get('senderEmail') or '－'}"
+            + f"\n{_patient_url(homis_id, str(data.get('karteUrl') or '')) if kid else _patient_url(homis_id, '')}\norderId={order_id}")
+    navi_callback.notify_dx(text, order_id)
+
+
+def _edit_finish(data: dict, order_id: str, homis_id: str, t0: float, sheet_row: int, lock: dict, success: bool, err: str,
+                 left: str, kid: str, url: str, verdict: str, baseline, failed_steps: list) -> dict:
+    total = time.time() - t0
+    log_result(order_id, success, kid if success else "", err, total)
+    if not success:
+        attempt = auto_retry.split_attempt(order_id)[1]
+        will = auto_retry.eligible(EDIT_TEMPLATE, order_id, err, left)
+        extra = ""
+        if will:
+            extra = f"自動で {auto_retry.DELAYS_SEC[attempt + 1] // 60} 分後にやり直します（{attempt + 1} 回目）。"
+        elif attempt >= 1 and left == "none" and err in auto_retry.RETRYABLE_ERRORS:
+            extra = f"自動で {attempt} 回やり直しましたが書けませんでした。先生に手で書いていただくようお伝えください。"
+        _edit_notify_dx(data, order_id, homis_id, kid, err, left, extra)
+    elif failed_steps:
+        navi_callback.notify_dx("HOMIS ライター（GCP）: 音声カルテ（先生のカルテ）は保存しましたが、途中の手順が失敗しました: "
+                                + "・".join(failed_steps) + "\n時刻・バイタル・各欄を HOMIS で確かめてください。"
+                                + f"\n{_patient_url(homis_id, url)}\norderId={order_id}", order_id)
+    if sheet_row:
+        try:
+            finish(sheet_row, _sheet_status(success, kid if success else ""), url if success else "", err)
+        except Exception:
+            logger.exception("結果シート更新失敗 orderId=%s", order_id)
+    return {"orderId": order_id, "success": success, "has_karte_id": bool(kid) and success, "error_type": err,
+            "karte_opened": left != "none", "total_sec": round(total, 1), "karte_id": kid if success else "",
+            "karte_url": url if success else "", "failed_steps": failed_steps, "verify": verdict, "retried": "",
+            "retried_blocked": "", "lock_waited_sec": lock.get("waited_sec", 0), "left_in_homis": left,
+            "baseline_upd": baseline}
+
+
+def _write_edit_locked(data: dict, order_id: str, homis_id: str, t0: float, sheet_row: int, lock: dict) -> dict:
+    """札を持っている間の karte_edit。書く前の確かめ → 編集 → 保存の直前の確かめ → 中断 → 読み直し"""
+    kid = str(data.get("karteId") or "")
+    attempt = auto_retry.split_attempt(order_id)[1]
+    _start_order()
+    _reset_opened()
+    reason, snap = karte_guard.before_write(homis_id, kid)
+    baseline = data.get("baseline_upd") if attempt >= 1 else snap
+    if not reason and attempt >= 1 and karte_guard.human_changed(baseline, snap):
+        reason = "skipped:human_edited"   # 控えから人が書いた（やり直さない・現場には出さない・仕様 5章 2b）
+    if reason:
+        logger.info("書く前の確かめで止める orderId=%s 理由=%s", order_id, reason)
+        return _edit_finish(data, order_id, homis_id, t0, sheet_row, lock, False, reason, "none", kid, "", "", baseline, [])
+    filled = edit_fill(data)
+    _TLS.edit_mode, _TLS.edit_kid, _TLS.edit_homis, _TLS.edit_baseline = True, kid, homis_id, baseline
+    try:
+        result = _run_once(filled)
+    finally:
+        _TLS.edit_mode = False
+    opened, blocked, stopped = _opened(), _blocked(), _stopped()
+    success, err, left = edit_outcome(result, opened, blocked, stopped, infer_error_type(result))
+    url = str(result.get("karte_url") or "") or str(data.get("karteUrl") or "")
+    verdict = ""
+    if success:
+        checked = verify_karte.verify(homis_id, kid, filled["sContent"], filled["oContent"], expect="interrupt")
+        verdict = "ok" if checked["verdict"] == "o_mismatch" else checked["verdict"]   # O は v0 では見ない（仕様 6章）
+        if verdict == "ok_processed" and checked.get("reason") == "s_edited":
+            # verify_karte 1.4.0 は「S が空でなければ人が処理した」とみなす。①は先生の今のカルテに上書きするので、
+            # 保存に失敗しても前の S が残っていて空にならない。①では S が送ったとおりのときだけ成功にする
+            verdict = "s_mismatch"
+        logger.info("読み直し orderId=%s verdict=%s status=%s reason=%s", order_id, checked["verdict"], checked["status"], checked["reason"])
+        if verdict not in ("ok", "ok_processed", "unverified"):
+            success, err, left = False, "verify:" + verdict, "saved"
+    failed = [str(x) for x in (result.get("failed_steps") or [])]
+    return _edit_finish(data, order_id, homis_id, t0, sheet_row, lock, success, err, left, kid, url, verdict, baseline, failed)
 
 
 # ---------- v3.12.0: 書込失敗の自動やり直し（仕様 docs/SPEC_実行リスト_v0.md v1.2 14章） ----------
@@ -670,6 +832,13 @@ def _will_retry(data: dict, order_id: str, res: dict) -> bool:
 def _note_baseline(data: dict, order_id: str, homis_id: str, res: dict) -> None:
     """やり直すときの控え（カルテ一覧の一番大きい番号）。1回目の失敗で取り、2回目以降は受け取った控えをそのまま使う"""
     if not _will_retry(data, order_id, res):
+        return
+    if _template_name(data) == EDIT_TEMPLATE:
+        if auto_retry.split_attempt(order_id)[1] >= 1:
+            res["baseline_upd"] = data.get("baseline_upd")   # 2回目以降は最初の控えのまま（途中で取り直さない）
+        elif res.get("baseline_upd") is None:
+            # 1回目で控えが無い（札が取れなかった・書く前に読めなかった）: いま読み直して控えにする。読めなければ None（手で）
+            res["baseline_upd"] = karte_guard.before_write(homis_id, str(data.get("karteId") or ""))[1]
         return
     if auto_retry.split_attempt(order_id)[1] >= 1 and data.get("baseline_karte_id") is not None:
         res["baseline_karte_id"] = data.get("baseline_karte_id")
@@ -689,11 +858,15 @@ def _schedule_retry(data: dict, order_id: str, homis_id: str, res: dict) -> None
     if not nxt or attempt > auto_retry.MAX_ATTEMPTS:   # 念のための上限（どんな場合も 3 回を超えない）
         return
     delay = auto_retry.DELAYS_SEC[attempt]
-    payload = {k: v for k, v in data.items() if k not in ("orderId", "baseline_karte_id")}
+    payload = {k: v for k, v in data.items() if k not in ("orderId", "baseline_karte_id", "baseline_upd")}
     payload["orderId"] = nxt
-    payload["baseline_karte_id"] = res.get("baseline_karte_id")
+    edit = _template_name(data) == EDIT_TEMPLATE
+    if edit:
+        payload["baseline_upd"] = res.get("baseline_upd")   # v3.13.0: ①は最終更新日時・更新者の控え
+    else:
+        payload["baseline_karte_id"] = res.get("baseline_karte_id")
     payload["recordDay"] = data.get("recordDay") or run_record.today()
-    if res.get("baseline_karte_id") is None:
+    if (res.get("baseline_upd") if edit else res.get("baseline_karte_id")) is None:
         # 控え（カルテ一覧の番号）が取れなかった。やり直すと人が書いたか分からないので、入れずに「手で」に回す
         word = "error:no_baseline"
     else:
@@ -718,7 +891,7 @@ def _schedule_retry(data: dict, order_id: str, homis_id: str, res: dict) -> None
     run_record.update(data.get("recordDay"), order_id, change)
     child = {"order_id": nxt, "route": parent.get("route") or run_record.route_of(nxt), "status": "scheduled",
              "received_at": run_record.now_iso(), "retry_of": order_id, "retry_at": retry_at, "attempt": attempt,
-             "payload": {k: v for k, v in payload.items() if k not in ("recordDay", "baseline_karte_id")},
+             "payload": {k: v for k, v in payload.items() if k not in ("recordDay", "baseline_karte_id", "baseline_upd")},
              "patient": parent.get("patient") or {"homis_id": homis_id}}
     for k in ("doc_type", "source", "fax_route"):
         if parent.get(k):
@@ -1186,6 +1359,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if template == "bot_s_interrupt" and not str(data.get("sContent") or ""):
             self._send(400, {"ok": False, "error": "missing_s"})
+            return
+        if template == EDIT_TEMPLATE and not (str(data.get("karteId") or "").isdigit() and str(data.get("soap_s") or "").strip()):
+            self._send(400, {"ok": False, "error": "missing_karte"})   # v3.13.0: カルテ番号と S が無ければ書かない
             return
         logger.info("書き込み開始 orderId=%s homisId=%s template=%s", order_id, homis_id, template)
         with WRITE_LOCK:

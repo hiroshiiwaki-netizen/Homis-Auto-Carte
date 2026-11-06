@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 """共通 JSON の入口 ①先生が選んだカルテに書く ときの、書く前の確かめと「人が書いたか」の見分け（読むだけ）
 
-版: 1.0.1
+版: 1.0.2
 最終更新: 2026-11-06
 改定履歴:
+  v1.0.2 11/06 黒ヤギ実装2回目の申し送り: 読めなかったら 0.5 秒おいて1回だけ読み直す（一時的な通信の揺らぎで止めない）／ログの例外の文は改行を空白に
   v1.0.1 11/06 黒ヤギ実装1回目: 読めなかった理由（例外の種類と短い文）をログに残す／human_changed に生のカルテ（upd_user が辞書）を渡しても名前で比べる
   v1.0.0 11/06 新規（仕様 docs/FAXカルテ_検討/SPEC_共通JSON入口_v0.md v1.0 5章 2)・2b)・3b)・14章）。
                ajax_karte_show（読むだけ・verify_karte と同じログイン）でそのカルテを読み、
@@ -17,15 +18,18 @@ from __future__ import annotations
 import logging
 import os
 import re
+import time
 from datetime import date, datetime, timedelta, timezone
 
 import verify_karte
 
-VERSION = "1.0.1"
+VERSION = "1.0.2"
 JST = timezone(timedelta(hours=9))
 logger = logging.getLogger("karte_guard")
 DONE_STATUS = verify_karte.DONE_STATUS   # 3・5・6・7
 CANCEL_STATUS = {"0"}
+READ_TRIES = 2          # 1.0.2: 読めなければ1回だけ読み直す
+READ_RETRY_WAIT = 0.5
 
 
 def max_days() -> int:
@@ -92,14 +96,18 @@ def read(homis_id: str, karte_id: str) -> dict | None:
     password = os.environ.get("HOMIS_PASSWORD", "")
     if not (user and password and homis_id and karte_id):
         return None
-    try:
-        op = verify_karte._opener()
-        verify_karte._login(op, user, password)
-        return verify_karte._read(op, homis_id, karte_id)
-    except Exception as e:  # noqa: BLE001  読めなければ「分からない」（呼ぶ側は書かない）
-        # 理由は種類と短い文だけ（verify_karte と同じ・カルテの中身は入らない）（黒ヤギ実装1回目 指摘1）
-        logger.warning("カルテを読めなかった karte_id=%s 理由=%s: %s", karte_id, type(e).__name__, str(e)[:80])
-        return None
+    for n in range(1, READ_TRIES + 1):
+        try:
+            op = verify_karte._opener()
+            verify_karte._login(op, user, password)
+            return verify_karte._read(op, homis_id, karte_id)
+        except Exception as e:  # noqa: BLE001  読めなければ「分からない」（呼ぶ側は書かない）
+            # 理由は種類と短い文だけ（verify_karte と同じ・カルテの中身は入らない）（黒ヤギ実装1回目 指摘1）。改行は空白に（2回目 指摘2）
+            text = " ".join(str(e).split())[:80]
+            logger.warning("カルテを読めなかった（%s/%s 回目） karte_id=%s 理由=%s: %s", n, READ_TRIES, karte_id, type(e).__name__, text)
+            if n < READ_TRIES:
+                time.sleep(READ_RETRY_WAIT)
+    return None
 
 
 def before_write(homis_id: str, karte_id: str, today: date | None = None) -> tuple[str, dict | None]:

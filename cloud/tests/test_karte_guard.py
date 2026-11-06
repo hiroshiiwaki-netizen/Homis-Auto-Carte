@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""karte_guard.py 1.0.0（共通 JSON の入口 ① 書く前の確かめ・人が書いたかの見分け）のテスト。すべてダミーの値。
+"""karte_guard.py 1.0.2（共通 JSON の入口 ① 書く前の確かめ・人が書いたかの見分け）のテスト。すべてダミーの値。
 偽の HOMIS（test_verify_karte.FakeHomis）に向けて、本物の verify_karte のログインと読み方で読む。
 使い方: py -3.12 -X utf8 cloud/tests/test_karte_guard.py
 """
@@ -96,6 +96,29 @@ class Read(unittest.TestCase):
             kg.before_write("1234567", "100", TODAY)
         self.assertIn("ValueError", cm.output[0])            # login_failed の種類と文がログに残る
         self.assertIn("login_failed", cm.output[0])
+
+    def test_r6_one_retry_after_a_blip(self):
+        """1.0.2: 1回目が通信の揺らぎで読めなくても、1回だけ読み直して読めれば書いてよい。2回とも読めなければ karte_unreadable"""
+        real, calls = verify_karte._read, []
+
+        def flaky(op, hid, kid):
+            calls.append(1)
+            if len(calls) == 1:
+                raise OSError("一時的な揺らぎ\n<html>502</html>")
+            return real(op, hid, kid)
+        self.h.karte_script = [k()]
+        verify_karte._read = flaky
+        try:
+            with self.assertLogs("karte_guard", level="WARNING") as cm:
+                self.assertEqual(kg.before_write("1234567", "100", TODAY)[0], "")
+            self.assertEqual(len(calls), 2)
+            self.assertNotIn("\n<html>", cm.output[0])   # 改行は空白にそろえる
+            verify_karte._read = lambda op, hid, kid: (_ for _ in ()).throw(OSError("down"))
+            with self.assertLogs("karte_guard", level="WARNING") as cm:
+                self.assertEqual(kg.before_write("1234567", "100", TODAY), ("karte_unreadable", None))
+            self.assertEqual(len(cm.output), kg.READ_TRIES)
+        finally:
+            verify_karte._read = real
 
     def test_r4_never_opens_edit(self):
         self.h.karte_script = [k()]
