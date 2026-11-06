@@ -1,9 +1,10 @@
 // main.go — カルテライターの実行リスト（app.nhw.jp/kartelog/・PWA）
 //
-// 版: 0.1.1
+// 版: 0.1.2
 // 最終更新: 2026-11-06
 // 改定履歴:
 //
+//	0.1.2 (2026-11-06) ヘッダーとアイコンのロボットを、法人のロボット（写真・岩城さん 11/6「このロボットを入れて」）に似せた絵に（robot.svg）
 //	0.1.1 (2026-11-06) 状態の言い方を「書込成功・書込失敗・書込待機中・書込中・停止の疑い」に（岩城さん 11/6「列で待っていますという表現はない」）
 //	0.1.0 (2026-11-06) 第1段（読むだけ）。記録の JSON（Cloud Storage・RECORD_BUCKET）を日付ごとに読み、
 //	                   タブ（全記録・OhiScanGo・問い合わせ・疑義照会）・しぼり込み・詳しい窓を出す。
@@ -24,7 +25,7 @@ import (
 	"time"
 )
 
-const version = "0.1.1"
+const version = "0.1.2"
 
 //go:embed public/*
 var staticFS embed.FS
@@ -116,6 +117,7 @@ func (a *App) routes() http.Handler {
 		"/kartelog/manifest.webmanifest": "manifest.webmanifest",
 		"/kartelog/sw.js":                "sw.js",
 		"/kartelog/icon.svg":             "icon.svg",
+		"/kartelog/robot.svg":            "robot.svg",
 	}
 	for path, file := range static {
 		mux.HandleFunc(path, a.serveStatic(sub, file))
