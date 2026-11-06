@@ -1,4 +1,4 @@
-// 実行リスト 0.3.2〜0.3.4 クリニックで絞った数字の試験（偽の画面部品で public/app.js を動かす。node だけで動く）
+// 実行リスト 0.3.2〜0.3.5 クリニックで絞った数字と版の試験（偽の画面部品で public/app.js を動かす。node だけで動く）
 // 使い方: node app-kartelog/test/app_clinic_test.cjs [app.js のパス]（省略時は ../public/app.js）
 const fs = require("fs");
 const vm = require("vm");
@@ -79,6 +79,24 @@ eq("押すとエラーの種類が外れる", st.err, "");
 eq("押すと検索語が外れる", st.q + "|" + el("q").value, "|");
 eq("押すと書込失敗だけ", st.s, "fail");
 eq("押したあと一覧に書込失敗の行が出る", /class="row/.test(els.list.innerHTML), true);
+
+// 0.3.5: 画面の版（見出しの横）と、版が 3 か所でそろっているか（main.go・app.js・sw.js）
+if (!process.argv[2]) {
+  const p = require("path");
+  const goV = (fs.readFileSync(p.join(__dirname, "..", "main.go"), "utf8").match(/^const version = "([^"]+)"/m) || [])[1];
+  const jsV = (src.match(/const APP_VERSION = "([^"]+)"/) || [])[1];
+  const swV = (fs.readFileSync(p.join(__dirname, "..", "public", "sw.js"), "utf8").match(/kartelog-([0-9.]+)"/) || [])[1];
+  eq("版 main.go と app.js が同じ", goV + "|" + jsV, goV + "|" + goV);
+  eq("版 main.go と sw.js が同じ", swV, goV);
+  ctx.showVersion(goV);
+  eq("見出しに版", el("ver").textContent, "版 " + goV);
+  eq("同じ版なら目立たせない", el("ver").classList.contains("old"), false);
+  ctx.showVersion("9.9.9");
+  eq("箱が新しいと F5 を案内", el("ver").textContent.includes("新しい版 9.9.9") && el("ver").textContent.includes("F5"), true);
+  eq("古い画面は目立たせる", el("ver").classList.contains("old"), true);
+  ctx.showVersion(undefined);
+  eq("版が読めないときは画面の版だけ", el("ver").textContent, "版 " + goV);
+}
 
 console.log(bad ?`FAIL ${bad}` : "ALL OK");
 process.exit(bad ? 1 : 0);

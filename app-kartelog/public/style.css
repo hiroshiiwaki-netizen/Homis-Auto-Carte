@@ -114,3 +114,6 @@ h3{font-size:14px;margin:20px 0 6px;color:var(--sub)}
 @media (max-width:960px){.runner{display:none}}
 /* 0.3.4: 赤い知らせにボタンが 2 つ並ぶとき（書込失敗だけ見る・すべてのクリニックで見る） */
 .alert .go+.go{margin-left:8px}
+/* 0.3.5: 見出しの横の版。古い画面のときは目立たせる */
+header h1 .ver{font-size:13px;font-weight:400;opacity:.85;margin-left:8px;letter-spacing:0}
+header h1 .ver.old{opacity:1;background:#fff;color:#c2410c;border-radius:999px;padding:2px 10px;font-weight:700}

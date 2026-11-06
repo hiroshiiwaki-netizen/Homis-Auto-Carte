@@ -1,4 +1,5 @@
-// カルテライター 実行リスト 0.3.4（読むだけ・第1段）
+// カルテライター 実行リスト 0.3.5（読むだけ・第1段）
+// 0.3.5 (2026-11-06) 見出しの横に版を出す。箱の版とずれていたら F5 を案内（岩城さん「画面にバージョンもだして」）
 // 0.3.4 (2026-11-06) 院の名前が空の行も「院の分からない」に入れる・「すべてのクリニックで見る」は院の失敗があっても出し、押すとエラーの種類・検索語も外す（黒ヤギ2回目）
 // 0.3.3 (2026-11-06) 院を選んでいるとき、院の分からない行の件数を棒グラフの下に出し、その中の書込失敗は赤い知らせで知らせる（黒ヤギ指摘1）
 // 0.3.2 (2026-11-06) クリニックを選ぶと、タブの件数・上の数字・棒グラフ・赤い知らせもその院だけで数える。件数の見出しに院名を出す
@@ -6,6 +7,7 @@
 "use strict";
 
 const API = "/kartelog/api/";
+const APP_VERSION = "0.3.5";   // main.go の version と同じにする（試験 test/app_clinic_test.cjs で照らす）
 const TABS = [
   ["all", "🗂️ 全記録", "all"], ["fax", "📠 OhiScanGo（FAX/SCAN）", "fax"], ["bot", "💬 問い合わせ（コール受付分）", "bot"], ["bot_g", "💊 疑義照会（Tukusiフォームから）", "gi"],
 ];
@@ -110,6 +112,13 @@ function showAlive(s) {
     parts.push(`<span class="chipx">書込待機の件数は読めませんでした</span>`);
   }
   $("alive").innerHTML = parts.join("");
+}
+
+// 0.3.5: 見出しの横に版を出す。箱（main.go の version）と画面（APP_VERSION）がずれていたら、古い画面が残っているので F5 を案内する
+function showVersion(server) {
+  const old = server && server !== APP_VERSION;
+  $("ver").textContent = "版 " + APP_VERSION + (old ? `（新しい版 ${server} があります。F5 を押してください）` : "");
+  $("ver").classList.toggle("old", !!old);
 }
 
 function filtered(rows) {
@@ -342,6 +351,7 @@ document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeDrawe
 (async function start() {
   $("day").value = todayStr();
   try { st.me = await getJSON("me"); } catch (e) { st.me = {}; }
+  showVersion(st.me.version);
   await load();
   setInterval(() => { if (!document.hidden && !$("drawer").classList.contains("on")) load(); }, 60000);
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("/kartelog/sw.js", { scope: "/kartelog/" }).catch(() => {});
