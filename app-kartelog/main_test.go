@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -112,7 +113,7 @@ func TestIAPVerifierRejectsForged(t *testing.T) {
 
 func TestClassify(t *testing.T) {
 	q := QueueInfo{Names: map[string]bool{"FAX-W": true}}
-	old := "2026-11-06T09:30:00+09:00"   // 30 分前
+	old := "2026-11-06T09:30:00+09:00"    // 30 分前
 	recent := "2026-11-06T09:55:00+09:00" // 5 分前
 	cases := []struct {
 		r            Record
@@ -219,6 +220,11 @@ func TestDaysAndFailedDay(t *testing.T) {
 
 func TestHeaders(t *testing.T) {
 	h := newTestApp(sample()).routes()
+	for _, p := range []string{"/kartelog/api/list", "/kartelog/api/record?day=2026-11-06&id=FAX-1", "/kartelog/"} {
+		if got := call(t, h, p, "a@nhw.jp").Header().Get("Cache-Control"); got != "no-store" {
+			t.Fatalf("%s にキャッシュしない印が無い: %q", p, got)
+		}
+	}
 	w := call(t, h, "/kartelog/api/status", "a@nhw.jp")
 	if w.Header().Get("Cache-Control") != "no-store" || !strings.Contains(w.Header().Get("Content-Security-Policy"), "default-src 'self'") {
 		t.Fatal("キャッシュを残さない・よその部品を読まない印")
@@ -273,9 +279,13 @@ func TestGCPSource(t *testing.T) {
 // 読めなかった記録は 1 回読み直し、それでもだめなら件数を返す（黙って捨てない）
 func TestMissingRecordsReported(t *testing.T) {
 	hits := map[string]int{}
+	var hmu sync.Mutex // 箱が並べて読むので、数える表に鍵（go test -race で見つけた）
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := r.URL.EscapedPath()
+		hmu.Lock()
 		hits[p]++
+		n := hits[p]
+		hmu.Unlock()
 		switch {
 		case strings.HasPrefix(p, "/token"):
 			w.Write([]byte(`{"access_token":"t","expires_in":3600}`))
@@ -283,7 +293,7 @@ func TestMissingRecordsReported(t *testing.T) {
 			w.Write([]byte(`{"items":[{"name":"records/2026-11-06/A.json"},{"name":"records/2026-11-06/B.json"},{"name":"records/2026-11-06/C.json"}]}`))
 		case strings.HasSuffix(p, "A.json"):
 			w.Write([]byte(`{"status":"ok"}`))
-		case strings.HasSuffix(p, "B.json") && hits[p] == 1:
+		case strings.HasSuffix(p, "B.json") && n == 1:
 			http.Error(w, "busy", 503) // 1 回目だけ失敗
 		case strings.HasSuffix(p, "B.json"):
 			w.Write([]byte(`{"status":"ok"}`))

@@ -35,7 +35,8 @@ const NEXT = {
   stale: ["ライターが途中で止まった見込みです。", "HOMIS でカルテを確かめ、無ければ手で書いてください。DX推進部にも知らせてください。"],
 };
 
-const st = { tab: "all", d: 0, from: "", s: "all", q: "", err: "", tests: false, rows: [], me: {}, data: null };
+const st = { tab: "all", d: 0, from: "", s: "all", q: "", err: "", clinic: "", tests: false, rows: [], me: {}, data: null };
+const pi = (r) => (r.pinfo && r.pinfo.found ? r.pinfo : null);   // 0.2.0: おひさまシステムの患者さんの情報
 const $ = (id) => document.getElementById(id);
 const esc = (v) => String(v == null ? "" : v).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const hm = (iso) => (iso || "").slice(11, 16);
@@ -109,7 +110,8 @@ function filtered(rows) {
   return rows.filter((r) => (st.tab === "all" || tabOf(r) === st.tab)
     && (st.s === "all" || (st.s === "fail" && isFail(r)) || (st.s === "ok" && r.view === "ok") || (st.s === "run" && isRun(r)))
     && (!st.err || r.error_type === st.err)
-    && (!q || [r.order_id, r.patient && r.patient.homis_id, r.patient && r.patient.name, r.doc_type, r.source, r.sender].some((v) => String(v || "").toLowerCase().includes(q))));
+    && (!st.clinic || (pi(r) && pi(r).clinic === st.clinic))
+    && (!q || [r.order_id, r.patient && r.patient.homis_id, pi(r) && pi(r).name, pi(r) && pi(r).kana, pi(r) && pi(r).orca, pi(r) && pi(r).clinic, r.doc_type, r.source, r.sender].some((v) => String(v || "").toLowerCase().includes(q))));
 }
 
 function render() {
@@ -124,6 +126,11 @@ function render() {
   const ng = base.filter(isFail);
   const run = base.filter(isRun).length;
   $("kLabel").textContent = st.d === 7 ? "7日の件数" : (st.from && st.from !== todayStr() ? md(st.from + "T") + "の件数" : "今日の件数");
+  const robot = document.querySelector(".robot");   // 0.2.0: 書込中・待機中があればせっせと揺れる・書込失敗があれば震える
+  if (robot) {
+    robot.classList.toggle("busy", rows.some(isRun));
+    robot.classList.toggle("alert", !rows.some(isRun) && rows.some(isFail));
+  }
   $("kAll").textContent = base.length; $("kOk").textContent = ok; $("kNg").textContent = ng.length; $("kRun").textContent = run;
   const done = ok + ng.length;
   const pct = done ? Math.round((ok / done) * 1000) / 10 : 0;
@@ -146,6 +153,8 @@ function render() {
 
   const errs = [...new Set(rows.map((r) => r.error_type).filter(Boolean))].sort();
   $("err_type").innerHTML = `<option value="">エラーの種類：すべて</option>` + errs.map((e) => `<option value="${esc(e)}" ${st.err === e ? "selected" : ""}>${esc(reason(e).slice(0, 26))}</option>`).join("");
+  const clinics = [...new Set(rows.map((r) => pi(r) && pi(r).clinic).filter(Boolean))].sort();
+  $("clinic").innerHTML = `<option value="">クリニック：すべて</option>` + clinics.map((c) => `<option value="${esc(c)}" ${st.clinic === c ? "selected" : ""}>${esc(c)}</option>`).join("");
   $("tests").classList.toggle("hidden", !st.me.admin);
   $("tests").classList.toggle("on", st.tests);
 
@@ -186,12 +195,14 @@ function actionHTML(r, i) {
 function rowHTML(r) {
   const i = st.rows.indexOf(r);
   const p = r.patient || {};
-  const name = p.name ? `${esc(p.name)} 様` : (p.homis_id ? `患者番号 ${esc(p.homis_id)}` : "患者さん不明");
+  const f = pi(r);
+  const name = f ? `${esc(f.name)} 様` : (p.homis_id ? `患者番号 ${esc(p.homis_id)}` : "患者さん不明");
+  const pl = f ? `<div class="pl"><span class="cl">${esc(f.clinic)}</span><span class="orca">ORCA ${esc(f.orca)}</span></div>` : "";
   const who = r.route === "fax" || r.route === "fax_mirror" ? (r.source ? "差出元：" + esc(r.source) : "") : (r.sender ? "送った人：" + esc(r.sender) : "");
   return `<div class="row ${esc(r.view)} ${r.test ? "test" : ""}" data-open="${i}">
     <div class="tm">${esc(hm(r.received_at))}${st.d === 7 ? `<small>${esc(md(r.day + "T"))}</small>` : ""}</div>
     <div>${badge(r)}</div>
-    <div><div class="who"><b>${name}</b>${r.doc_type ? `<span class="dt">${esc(r.doc_type)}</span>` : ""}</div>
+    <div>${pl}<div class="who"><b>${name}</b>${r.doc_type ? `<span class="dt">${esc(r.doc_type)}</span>` : ""}</div>
       <div><span class="src ${esc(tabOf(r) === "other" ? "other" : r.route.replace("_mirror", "").replace("_test", ""))}">${esc(SRC[r.route] || r.route)}</span><span class="sd">${who}</span></div>
       <div class="oid">${esc(r.order_id)}</div></div>
     <div>${whyText(r)}</div>
@@ -207,7 +218,10 @@ async function openDrawer(i) {
   const purl = homisPatientURL(r.patient && r.patient.homis_id);
   $("dbody").innerHTML = `<h2>${esc(SRC[r.route] || r.route)}　${esc(md(r.day + "T"))} ${esc(hm(r.received_at))}</h2><div>${badge(r)}</div>
     <dl class="dl">
-      <dt>患者さん</dt><dd>${r.patient && r.patient.name ? esc(r.patient.name) + " 様　" : ""}${purl ? `<a href="${esc(purl)}" target="_blank" rel="noopener noreferrer">患者ページ ↗</a>` : "（患者番号なし）"}</dd>
+      <dt>患者さん</dt><dd>${pi(r) ? esc(pi(r).name) + " 様（" + esc(pi(r).kana) + "）　" : ""}${purl ? `<a href="${esc(purl)}" target="_blank" rel="noopener noreferrer">患者ページ ↗</a>` : "（患者番号なし）"}</dd>
+      <dt>所属クリニック</dt><dd>${esc(pi(r) ? pi(r).clinic : "－")}</dd>
+      <dt>ORCA 番号</dt><dd>${esc(pi(r) ? pi(r).orca : "－")}</dd>
+      <dt>HOMIS 番号</dt><dd>${esc((r.patient && r.patient.homis_id) || "－")}${r.pinfo && !r.pinfo.found ? `<div class="why">おひさまシステムで見つからない番号です（2 つ目のクリニックの番号など）</div>` : ""}</dd>
       <dt>書類種</dt><dd>${esc(r.doc_type || "－")}</dd>
       <dt>${r.route === "fax" ? "差出元" : "送った人"}</dt><dd>${esc((r.route === "fax" ? r.source : r.sender) || "－")}</dd>
       <dt>注文番号</dt><dd class="oid">${esc(r.order_id)}</dd>
@@ -254,6 +268,7 @@ document.addEventListener("click", (ev) => {
 function setS(s) { st.s = s; document.querySelectorAll("[data-s]").forEach((b) => b.classList.toggle("on", b.dataset.s === s)); render(); }
 $("q").addEventListener("input", (e) => { st.q = e.target.value.trim(); render(); });
 $("err_type").addEventListener("change", (e) => { st.err = e.target.value; render(); });
+$("clinic").addEventListener("change", (e) => { st.clinic = e.target.value; render(); });
 $("day").addEventListener("change", (e) => {
   st.from = e.target.value; st.d = 0;
   document.querySelectorAll("[data-d]").forEach((b) => b.classList.toggle("on", b.dataset.d === "0" && st.from === todayStr()));

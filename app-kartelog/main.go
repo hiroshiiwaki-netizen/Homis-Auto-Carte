@@ -1,9 +1,11 @@
 // main.go — カルテライターの実行リスト（app.nhw.jp/kartelog/・PWA）
 //
-// 版: 0.1.3
+// 版: 0.2.0
 // 最終更新: 2026-11-06
 // 改定履歴:
 //
+//	0.2.0 (2026-11-06) 所属クリニック・ORCA番号・患者名をおひさまシステム（FM の API_M_PATIENT_LINKINFO を homisID 完全一致）から引いて出す（patient.go・仕様 v0.8 13章）。
+//	                   一覧は FM を待たず、裏の係が引いて覚える。FM_HOST 等が無ければ今まで通り患者番号だけ
 //	0.1.3 (2026-11-06) ロボットを Antigravity が描いた絵（robot.png・アイコン icon-192/512.png）に替え、大きく（岩城さん「もう少し大きく」「Antigravity に」）
 //	0.1.2 (2026-11-06) ヘッダーとアイコンのロボットを、法人のロボット（写真・岩城さん 11/6「このロボットを入れて」）に似せた絵に（robot.svg）
 //	0.1.1 (2026-11-06) 状態の言い方を「書込成功・書込失敗・書込待機中・書込中・停止の疑い」に（岩城さん 11/6「列で待っていますという表現はない」）
@@ -17,16 +19,19 @@
 package main
 
 import (
+	"context"
 	"embed"
 	"io/fs"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 )
 
-const version = "0.1.3"
+const version = "0.2.0"
 
 //go:embed public/*
 var staticFS embed.FS
@@ -40,6 +45,11 @@ type Config struct {
 	StorageBase string // テスト用（既定 https://storage.googleapis.com）
 	TasksBase   string // テスト用（既定 https://cloudtasks.googleapis.com/v2/）
 	TokenURL    string // テスト用（既定 metadata）
+	FMHost      string // FM_HOST（おひさまシステム）
+	FMDB        string // FM_DB
+	FMUser      string // FM_USER（Secret）
+	FMPass      string // FM_PASSWORD（Secret）
+	FMLayout    string // FM_LAYOUT（既定 API_M_PATIENT_LINKINFO）
 }
 
 func loadConfig() Config {
@@ -50,6 +60,11 @@ func loadConfig() Config {
 		StorageBase: envOr("GCS_BASE", "https://storage.googleapis.com"),
 		TasksBase:   envOr("CLOUD_TASKS_BASE", "https://cloudtasks.googleapis.com/v2/"),
 		TokenURL:    envOr("METADATA_TOKEN_URL", "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token"),
+		FMHost:      strings.TrimSpace(os.Getenv("FM_HOST")),
+		FMDB:        strings.TrimSpace(os.Getenv("FM_DB")),
+		FMUser:      strings.TrimSpace(os.Getenv("FM_USER")),
+		FMPass:      strings.TrimSpace(os.Getenv("FM_PASSWORD")),
+		FMLayout:    strings.TrimSpace(os.Getenv("FM_LAYOUT")),
 	}
 	for _, q := range strings.Split(os.Getenv("QUEUES"), ",") {
 		if q = strings.Trim(strings.TrimSpace(q), "/"); q != "" {
@@ -80,9 +95,25 @@ func main() {
 	}
 	port := envOr("PORT", "8080")
 	app := newApp(cfg, v, newGCP(cfg))
-	log.Printf("kartelog %s listening on :%s bucket_set=%t queues=%d admins=%d", version, port, cfg.Bucket != "", len(cfg.Queues), len(cfg.Admins))
+	var fm *fmSource
+	if cfg.FMHost != "" && cfg.FMDB != "" && cfg.FMUser != "" && cfg.FMPass != "" {
+		fm = newFMSource(cfg.FMHost, cfg.FMDB, cfg.FMUser, cfg.FMPass, cfg.FMLayout)
+		app.pinfo = NewResolver(fm)
+	}
+	log.Printf("kartelog %s listening on :%s bucket_set=%t queues=%d admins=%d fm=%t", version, port, cfg.Bucket != "", len(cfg.Queues), len(cfg.Admins), app.pinfo != nil)
 	srv := &http.Server{Addr: ":" + port, Handler: app.routes(), ReadHeaderTimeout: 10 * time.Second}
-	if err := srv.ListenAndServe(); err != nil {
+	go func() { // 箱を止めるとき（Cloud Run の SIGTERM）に FM のセッションを閉じる（仕様 13.2）
+		ch := make(chan os.Signal, 1)
+		signal.Notify(ch, syscall.SIGTERM, os.Interrupt)
+		<-ch
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		srv.Shutdown(ctx)
+		if fm != nil {
+			fm.Close(ctx)
+		}
+	}()
+	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}
 }
@@ -94,6 +125,7 @@ type App struct {
 	src   Source
 	cache *dayCache
 	now   func() time.Time
+	pinfo *Resolver // おひさまシステムの患者さんの表示（nil なら出さない）
 }
 
 func newApp(cfg Config, v Verifier, src Source) *App {

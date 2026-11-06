@@ -24,10 +24,11 @@ const (
 // Row は一覧の 1 行（記録＋箱が決めた見え方）。送られた中身（S・O）は入れない。
 type Row struct {
 	Record
-	Day    string `json:"day"`
-	View   string `json:"view"`   // ok／fail／done／waiting（列で待つ）／running／stale（止まっているかも）
-	Action string `json:"action"` // open／rewrite（第3段）／cancel_then_rewrite（第3段）／check／none
-	Test   bool   `json:"test"`   // 試験の行（FAX-MIRROR・BOT-TEST）
+	Day    string       `json:"day"`
+	View   string       `json:"view"`            // ok／fail／done／waiting（列で待つ）／running／stale（止まっているかも）
+	Action string       `json:"action"`          // open／rewrite（第3段）／cancel_then_rewrite（第3段）／check／none
+	Test   bool         `json:"test"`            // 試験の行（FAX-MIRROR・BOT-TEST）
+	Pinfo  *PatientInfo `json:"pinfo,omitempty"` // 0.2.0: 所属クリニック・ORCA・患者名（覚えている分だけ）
 }
 
 func isTestRoute(route string) bool { return route == "fax_mirror" || route == "bot_test" }
@@ -165,6 +166,7 @@ func (a *App) handleList(w http.ResponseWriter, r *http.Request, u User) {
 		}
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].ReceivedAt > rows[j].ReceivedAt })
+	a.attachPatients(rows)
 	writeJSON(w, 200, map[string]any{"rows": rows, "days": days, "failed_days": failedDays, "missing": missing, "queue_ok": qerr == nil,
 		"queues": q.Counts, "now": now.In(jst).Format(time.RFC3339)})
 }
@@ -193,6 +195,13 @@ func (a *App) handleRecord(w http.ResponseWriter, r *http.Request, u User) {
 		writeJSON(w, 403, map[string]any{"error": "forbidden"})
 		return
 	}
+	if p, ok := m["patient"].(map[string]any); ok && a.pinfo != nil {
+		if id, _ := p["homis_id"].(string); id != "" {
+			if info, ok := a.pinfo.Lookup([]string{id})[id]; ok {
+				m["pinfo"] = info
+			}
+		}
+	}
 	writeJSON(w, 200, m)
 }
 
@@ -212,4 +221,23 @@ func (a *App) handleStatus(w http.ResponseWriter, r *http.Request, u User) {
 	}
 	writeJSON(w, 200, map[string]any{"queue_ok": qerr == nil, "queues": q.Counts, "last_finished_at": last,
 		"now": a.now().In(jst).Format(time.RFC3339)})
+}
+
+// attachPatients は覚えている患者さんの情報だけを付ける（FM は待たない・まだの番号は裏の係に頼む）。
+func (a *App) attachPatients(rows []Row) {
+	if a.pinfo == nil {
+		return
+	}
+	// 一覧は新しい順。頼みの列は後ろから引くので、古い順に頼む＝新しいカルテを先に引く
+	ids := make([]string, 0, len(rows))
+	for i := len(rows) - 1; i >= 0; i-- {
+		ids = append(ids, rows[i].Patient.HomisID)
+	}
+	got := a.pinfo.Lookup(ids)
+	for i := range rows {
+		if info, ok := got[rows[i].Patient.HomisID]; ok {
+			v := info
+			rows[i].Pinfo = &v
+		}
+	}
 }
