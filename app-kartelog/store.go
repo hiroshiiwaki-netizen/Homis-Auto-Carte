@@ -27,6 +27,7 @@ type Record struct {
 	KarteID     string   `json:"karte_id,omitempty"`
 	KarteURL    string   `json:"karte_url,omitempty"`
 	LeftInHomis string   `json:"left_in_homis,omitempty"`
+	Verify      string   `json:"verify,omitempty"` // 0.2.2: 書込後確認の結果（ライター 3.12.0 から記録・無ければ出さない）
 	DocType     string   `json:"doc_type,omitempty"`
 	Source      string   `json:"source,omitempty"`
 	FaxRoute    string   `json:"fax_route,omitempty"`

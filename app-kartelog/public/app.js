@@ -175,12 +175,39 @@ function badge(r) {
     waiting: `<span class="badge waiting">⏳ 書込待機中</span>`, running: `<span class="badge running">✍️ 書込中</span>`, done: `<span class="badge done">☑ 対応済み</span>` }[r.view] || "";
 }
 
+// 0.2.2: 番号の名前（岩城さん「注文番号って何？」）。FAX＝OhiScanGo の FAX受付番号、問い合わせ＝問い合わせ番号、疑義照会＝送信時刻
+function idText(r) {
+  const o = r.order_id || "";
+  const base = o.replace(/-A[1-3]$/, "");
+  const tail = base === o ? "" : `（自動やり直し ${o.slice(-2)}）`;
+  let m;
+  if ((m = base.match(/^FAX-(?:MIRROR-)?(.+)$/))) return `OhiScanGo 札番号 ${m[1]}${tail}`;   // 起動時刻＋何枚目の札（OhiScanGo kartelock.go）
+  if ((m = base.match(/^BOT-(?:TEST-)?G-(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})/))) return `疑義照会の送信時刻 ${m[1]}/${m[2]}/${m[3]} ${m[4]}:${m[5]}:${m[6]}${tail}`;
+  if ((m = base.match(/^BOT-(?:TEST-)?(.+)-\d{14}$/))) return `問い合わせ番号 ${m[1]}${tail}`;
+  return `番号 ${o}`;
+}
+// FAX の札番号の読み方（OhiScanGo を起動した時刻＋起動してから何枚目のカルテ順番札か）
+function faxNote(r) {
+  const m = (r.order_id || "").match(/^FAX-(?:MIRROR-)?(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})\d{2}-(\d+)/);
+  return m ? `<div class="why">（OhiScanGo を ${+m[2]}/${+m[3]} ${+m[4]}:${m[5]} に起動してから ${m[6]} 枚目の札）</div>` : "";
+}
+// 0.2.2: 時刻の流れの言い方（記録の言葉を、画面ではこう出す）
+const KIND = { fax: "FAX", fax_mirror: "FAX 試し書き", bot: "問い合わせ", bot_g: "疑義照会", bot_test: "問い合わせ 試験" };
+function tlText(what, r) {
+  if (what === "受け口が受けた") return `GCP 受付（${KIND[r.route] || "受付"}）`;
+  if (what === "ライターが受け取った") return "カルテライター受付";
+  if (what === "書けた") return "カルテ書込 ○";
+  if (what === "書けなかった") return "カルテ書込 ×";
+  if (what.startsWith("受け口で落とした")) return what.replace("受け口で落とした", "GCP 受付で止めた");
+  return what;
+}
+
 function whyText(r) {
   if (r.view === "fail") return `<span class="why ng">${esc(reason(r.error_type))}</span>`;
   if (r.view === "stale") return `<span class="why ng">書込中のまま 15 分を過ぎ、書込待機にもありません</span>`;
   if (r.view === "waiting") return `<span class="why">書込の順番を待っています</span>`;
   if (r.view === "running") return `<span class="why">${r.status === "received" ? "受け口が受けました" : "ライターが HOMIS に書いています"}</span>`;
-  if (r.view === "ok") return `<span class="why">読み直しまで一致</span>`;
+  if (r.view === "ok") return `<span class="why">カルテ書込 ○${r.verify === "ok" ? "　・　書込後確認 ○" : ""}</span>`;
   return "";
 }
 
@@ -204,7 +231,7 @@ function rowHTML(r) {
     <div>${badge(r)}</div>
     <div>${pl}<div class="who"><b>${name}</b>${r.doc_type ? `<span class="dt">${esc(r.doc_type)}</span>` : ""}</div>
       <div><span class="src ${esc(tabOf(r) === "other" ? "other" : r.route.replace("_mirror", "").replace("_test", ""))}">${esc(SRC[r.route] || r.route)}</span><span class="sd">${who}</span></div>
-      <div class="oid">${esc(r.order_id)}</div></div>
+      <div class="oid">${esc(idText(r))}</div></div>
     <div>${whyText(r)}</div>
     <div>${actionHTML(r, i)}</div></div>`;
 }
@@ -224,7 +251,7 @@ async function openDrawer(i) {
       <dt>HOMIS 番号</dt><dd>${esc((r.patient && r.patient.homis_id) || "－")}${r.pinfo && !r.pinfo.found ? `<div class="why">おひさまシステムで見つからない番号です（2 つ目のクリニックの番号など）</div>` : ""}</dd>
       <dt>書類種</dt><dd>${esc(r.doc_type || "－")}</dd>
       <dt>${r.route === "fax" ? "差出元" : "送った人"}</dt><dd>${esc((r.route === "fax" ? r.source : r.sender) || "－")}</dd>
-      <dt>注文番号</dt><dd class="oid">${esc(r.order_id)}</dd>
+      <dt>番号</dt><dd>${esc(idText(r))}${faxNote(r)}<div class="oid">${esc(r.order_id)}</div></dd>
       <dt>理由</dt><dd>${esc(r.view === "stale" ? "停止の疑い（途中で止まった見込み）" : reason(r.error_type) || "なし")}</dd>
       <dt>カルテ</dt><dd>${url ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">HOMIS で開く ↗</a>` : "（書込できていません）"}</dd>
     </dl>
@@ -235,7 +262,8 @@ async function openDrawer(i) {
   try {
     const d = await getJSON(`record?day=${encodeURIComponent(r.day)}&id=${encodeURIComponent(r.order_id)}`);
     const p = d.payload || {};
-    const tl = (d.timeline || []).map((t) => `<li>${esc(hm(t.at))}　${esc(t.what)}</li>`).join("");
+    const tl = (d.timeline || []).map((t) => `<li>${esc(hm(t.at))}　${esc(tlText(t.what, r))}</li>`).join("")
+      + (d.verify ? `<li>${esc(hm(d.finished_at))}　書込後確認 ${d.verify === "ok" ? "○" : "×"}</li>` : "");
     $("detail").innerHTML = `<h3>時刻の流れ</h3><ul class="tl">${tl || "<li>（記録なし）</li>"}</ul>
       <h3>送られた S</h3><div class="body">${esc(p.sContent || "（なし）")}</div>
       ${p.oContent != null ? `<h3>送られた O</h3><div class="body">${esc(p.oContent || "（なし）")}</div>` : ""}`;

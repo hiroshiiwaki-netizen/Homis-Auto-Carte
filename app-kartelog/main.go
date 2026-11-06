@@ -1,9 +1,10 @@
 // main.go — カルテライターの実行リスト（app.nhw.jp/kartelog/・PWA）
 //
-// 版: 0.2.1
+// 版: 0.2.2
 // 最終更新: 2026-11-06
 // 改定履歴:
 //
+//	0.2.2 (2026-11-06) 言い方: 「カルテ書込 ○・書込後確認 ○」・番号の名前（OhiScanGo 札番号＝起動時刻＋何枚目の札・問い合わせ番号・疑義照会の送信時刻）・時刻の流れ（GCP 受付・カルテライター受付）（岩城さん 11/6）
 //	0.2.1 (2026-11-06) タブの名前を「OhiScanGo（FAX/SCAN）」「問い合わせ（コール受付分）」「疑義照会（Tukusiフォームから）」に（岩城さん「OhiscanGO って誰もわからない」）
 //	0.2.0 (2026-11-06) 所属クリニック・ORCA番号・患者名をおひさまシステム（FM の API_M_PATIENT_LINKINFO を homisID 完全一致）から引いて出す（patient.go・仕様 v0.8 13章）。
 //	                   一覧は FM を待たず、裏の係が引いて覚える。FM_HOST 等が無ければ今まで通り患者番号だけ
@@ -32,7 +33,7 @@ import (
 	"time"
 )
 
-const version = "0.2.1"
+const version = "0.2.2"
 
 //go:embed public/*
 var staticFS embed.FS
