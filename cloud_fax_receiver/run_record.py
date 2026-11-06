@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 """実行リストの記録（1 注文＝1 つの JSON）を Cloud Storage に置く部品。受け口とライターで同じ中身を使う。
 
-版: 1.0.0
+版: 1.1.0
 最終更新: 2026-11-06
 改定履歴:
+  v1.1.0 11/06 道の名前に karte_edit（KE-）・karte_edit_test（KE-TEST-）を足した（共通 JSON の入口 ①）
   v1.0.0 11/06 新規（仕様 docs/SPEC_実行リスト_v0.md v0.4 の第1段）。
                置き場は環境変数 RECORD_BUCKET。空なら何もしない（配置しても、置き場を決めるまで今まで通り）。
                パス records/<日本時間の日付>/<注文番号>.json。再書き込み（-R1・-R2）も元の注文の日のフォルダ。
@@ -31,7 +32,7 @@ from datetime import datetime, timedelta, timezone
 
 logger = logging.getLogger("run_record")
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 JST = timezone(timedelta(hours=9))
 TIMEOUT_SEC = 5.0        # 1 回の通信の上限（仕様 5章）
 PAUSE_SEC = 60.0         # 失敗したあと通信しない時間
@@ -197,6 +198,10 @@ def route_of(order_id: str) -> str:
         return "bot_g"
     if o.startswith("BOT-"):
         return "bot"
+    if o.startswith("KE-TEST-"):
+        return "karte_edit_test"   # v1.1.0: 共通 JSON の入口 ①先生のカルテ（試験）
+    if o.startswith("KE-"):
+        return "karte_edit"        # v1.1.0: 共通 JSON の入口 ①先生が選んだカルテに書く
     if o.startswith("KJ-"):
         return "karte_json"
     return "other"

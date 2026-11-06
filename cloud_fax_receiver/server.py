@@ -2,9 +2,13 @@
 """FAX カルテの受け口（横付けで受け取るだけ・段1）
 
 ==============================================================================
-バージョン: 0.6.0
+バージョン: 0.7.0
 最終更新: 2026/11/06
 改定履歴（新しい順・全体は docs/SPEC_v3_cloud.md 0章「モジュール別の版」）:
+  v0.7.0 11/06 共通 JSON の入口 ①先生が選んだカルテに書く（POST /karte/receive・仕様 docs/FAXカルテ_検討/SPEC_共通JSON入口_v0.md v1.0）。
+               合言葉 KARTE_RECEIVER_KEY・KARTE_MODE（off／test／live・既定 off）・列 KARTE_QUEUE。karte_url から患者番号とカルテ番号を読み、
+               sent_at・save_mode（中断だけ）・S が空でない・時刻の形・test はテスト患者だけ を確かめ、だめなら 4xx＋理由（Tukusi の赤丸）。
+               注文番号 KE-<カルテ番号>-<送った時刻14桁>（test は KE-TEST-）。型紙 karte_edit の仕事を列に入れ、記録に received。②新規は次の版
   v0.6.0 11/06 実行リストの記録（run_record.py 1.0.0・置き場 RECORD_BUCKET・空なら何もしない）。本番の FAX と問い合わせ（live・test）で、
                列に入れる前に received（無いときだけ作る＝ライターの記録を上書きしない）、落としたら rejected と理由を残す
                （黒ヤギ 実行リスト仕様1回目 指摘1: 受け口で落ちたものが一覧から消えないように）。ライターへの仕事に recordDay（記録の日付）を足す。
@@ -83,7 +87,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import run_record
 
-VERSION = "0.6.0"
+VERSION = "0.7.0"
 # v0.6.0: 受け口では記録の通信を 3 秒まで（受け口の上限 30 秒・列 5 秒×2・知らせ 3 秒×2 の中に収める）
 run_record.TIMEOUT_SEC = 3.0
 MAX_BODY = 256 * 1024          # 受け取る本文の上限（バイト）
@@ -468,6 +472,150 @@ def enqueue_bot(body: dict) -> tuple[str, str, str]:
     return word, order_id, check
 
 
+# ---------- v0.7.0: 共通 JSON の入口 ①先生が選んだカルテに書く（POST /karte/receive） ----------
+# 仕様 docs/FAXカルテ_検討/SPEC_共通JSON入口_v0.md v1.0（黒ヤギ仕様6回目【進めてよい】）。②新規（karte_url が無い）は次の版
+KARTE_URL_RE = re.compile(r"^https://homis\.jp/", re.I)
+KARTE_TEXT_FIELDS = ("soap_s", "soap_o", "soap_ap_summary", "soap_ap_temporary", "instruction")
+KARTE_VITAL_FIELDS = ("vital_bt", "vital_bp_h", "vital_bp_l", "vital_pr", "vital_spo2")
+TIME_RE = re.compile(r"^([01]?[0-9]|2[0-3]):[0-5][0-9]$")
+KARTE_REASON_TEXT = {
+    "no_karte_url": "書きたいカルテの URL がありません",
+    "bad_karte_url": "カルテの URL が読めません（HOMIS のカルテの URL を選んでください）",
+    "bad_sent_at": "送った時刻（sent_at）がありません",
+    "bad_save_mode": "保存の仕方は中断（interrupt）だけです",
+    "empty_s": "S が空です",
+    "patient_mismatch": "カルテの URL と患者さんが食い違っています",
+    "bad_time": "開始・終了の時刻の形が違います（HH:MM）",
+    "test_only": "テスト運用中のため本番のカルテには書けません",
+    "no_config": "受け口の設定が足りません",
+    "not_supported_yet": "カルテの URL が無い（新規で作る）入口はまだ使えません",
+}
+
+
+def karte_mode() -> str:
+    mode = os.environ.get("KARTE_MODE", "").strip().lower()
+    return mode if mode in ("off", "test", "live") else "off"
+
+
+def parse_karte_url(url) -> tuple[str, str]:
+    """先生が選んだカルテの URL から (患者番号, カルテ番号)。読めなければ ("", "")。
+    patient_id・karte_id の項目を読む。# のあと・前後の空白・全角の数字はそろえる（黒ヤギ v1.0 確認 指摘1）"""
+    s = "" if url is None else unicodedata.normalize("NFKC", str(url)).strip()
+    if not KARTE_URL_RE.match(s):
+        return "", ""
+    q = s.split("?", 1)[1] if "?" in s else ""
+    q = q.replace("#", "&")
+    vals = {}
+    for part in q.split("&"):
+        k, _, v = part.partition("=")
+        vals.setdefault(k.strip().lower(), v.strip())
+    pid, kid = vals.get("patient_id", ""), vals.get("karte_id", "")
+    if not (LIVE_HOMIS_NUM_RE.match(pid) and LIVE_HOMIS_NUM_RE.match(kid)):
+        return "", ""
+    return pid, kid
+
+
+def karte_order_id(karte_id: str, sent_at, test: bool) -> str:
+    digits = "".join(c for c in unicodedata.normalize("NFKC", str(sent_at or "")) if c in "0123456789")
+    if len(digits) < 14 or not karte_id:
+        return ""
+    return f"KE-{'TEST-' if test else ''}{karte_id}-{digits[:14]}"
+
+
+def check_karte_body(body: dict) -> tuple[str, dict]:
+    """①の本文を確かめる。返り値 (理由 or "", ライターに渡す中身)。理由があれば 4xx で返す"""
+    mode = karte_mode()
+    if not body.get("karte_url"):
+        if body.get("patient_id") or body.get("homis_url"):
+            return "not_supported_yet", {}
+        return "no_karte_url", {}
+    pid, kid = parse_karte_url(body.get("karte_url"))
+    if not pid:
+        return "bad_karte_url", {}
+    for k in ("patient_id", "homis_url"):   # 両方来ても一致すれば受ける（黒ヤギ 5回目 確認点3）
+        if body.get(k) and extract_homis_id(body.get(k)) != pid:
+            return "patient_mismatch", {}
+    if str(body.get("save_mode") or "interrupt").strip().lower() != "interrupt":
+        return "bad_save_mode", {}
+    s = body.get("soap_s")
+    if not isinstance(s, str) or not s.strip():
+        return "empty_s", {}
+    for k in ("start_time", "end_time"):
+        v = str(body.get(k) or "").strip()
+        if v and not TIME_RE.match(unicodedata.normalize("NFKC", v)):
+            return "bad_time", {}
+    if mode == "test" and pid not in MIRROR_TEST_PATIENTS:
+        return "test_only", {}
+    order_id = karte_order_id(kid, body.get("sent_at"), mode == "test")
+    if not order_id:
+        return "bad_sent_at", {}
+    if not all(os.environ.get(k, "").strip() for k in ("WRITER_URL", "KARTE_QUEUE", "TASKS_INVOKER_SA", "WRITER_KEY")):
+        return "no_config", {}
+    payload = {"orderId": order_id, "homisId": pid, "karteId": kid, "karteUrl": str(body.get("karte_url")).strip(),
+               "template": "karte_edit", "patientName": ""}
+    for k in KARTE_TEXT_FIELDS:
+        v = body.get(k)
+        payload[k] = v if isinstance(v, str) else ""
+    for k in KARTE_VITAL_FIELDS:
+        v = body.get(k)
+        payload[k] = "" if v is None else unicodedata.normalize("NFKC", str(v)).strip()[:10]
+    for k in ("start_time", "end_time"):
+        payload[k] = unicodedata.normalize("NFKC", str(body.get(k) or "")).strip()
+    payload["sContent"] = payload["soap_s"]          # ライターの共通の名前（記録・読み直し）
+    payload["oContent"] = payload["soap_o"]
+    payload["senderEmail"] = _label(body.get("sender_email"))
+    payload["source"] = _label(body.get("source"))
+    return "", payload
+
+
+def enqueue_karte(body: dict) -> tuple[int, dict, dict]:
+    """返り値 (HTTP の番号, 返事, 記録用の様子)。off は記録だけ。本文・患者番号は記録に出さない"""
+    mode = karte_mode()
+    reason, payload = check_karte_body(body)
+    info = {"mode": mode}
+    if reason:
+        info["reason"] = reason
+        code = 503 if reason == "no_config" else 400
+        return code, {"ok": False, "error": reason, "message": KARTE_REASON_TEXT.get(reason, reason)}, info
+    order_id = payload["orderId"]
+    info["order_id"] = order_id
+    if mode == "off":
+        info["result"] = "off"
+        return 200, {"ok": True, "order_id": order_id, "mode": "off"}, info
+    day = run_record.today()
+    meta = {"doc_type": "音声カルテ（先生のカルテ）", "sender": payload["senderEmail"], "source": payload["source"]}
+    rec_payload = {k: v for k, v in payload.items()}
+    record_received(day, order_id, rec_payload, meta)
+    queue = os.environ.get("KARTE_QUEUE", "").strip().strip("/")
+    task = _build_task(queue, order_id, payload["homisId"], "", payload["sContent"], payload["oContent"],
+                       template="karte_edit", record_day=day if run_record.enabled() else "")
+    body_json = json.loads(base64.b64decode(task["task"]["httpRequest"]["body"]).decode("utf-8"))
+    body_json.update({k: v for k, v in payload.items() if k not in body_json})
+    task["task"]["httpRequest"]["body"] = base64.b64encode(json.dumps(body_json, ensure_ascii=False).encode("utf-8")).decode("ascii")
+    word = _post_task(queue, task)
+    info["result"] = word
+    if word.startswith("error"):
+        record_rejected(day, order_id, word, rec_payload, meta, payload["homisId"])
+        notify_karte_failure(order_id, payload["senderEmail"], word)
+        return 503, {"ok": False, "error": "queue", "message": "いま受け付けられませんでした。少しして送り直してください"}, info
+    return 200, {"ok": True, "order_id": order_id}, info
+
+
+def notify_karte_failure(order_id: str, sender: str, reason: str) -> None:
+    """列に入れられなかったことを DX に（送った先生・番号・理由だけ）"""
+    hook = os.environ.get("DX_ALERT_WEBHOOK", "").strip()
+    if not hook:
+        return
+    text = f"【音声カルテ】カルテの受付で列に入れられませんでした（{reason}）。送った人 {sender or '（不明）'}\n{order_id}"
+    try:
+        req = urllib.request.Request(hook, data=json.dumps({"text": text}, ensure_ascii=False).encode("utf-8"),
+                                     method="POST", headers={"Content-Type": "application/json; charset=utf-8"})
+        with urllib.request.urlopen(req, timeout=NOTIFY_TIMEOUT):
+            pass
+    except Exception:  # noqa: BLE001
+        log_line({"event": "karte_notify_failed", "severity": "WARNING"})
+
+
 _first_request_done = False
 
 
@@ -683,10 +831,57 @@ class Handler(BaseHTTPRequestHandler):
         log_line(record)
         self._reply(200, {"ok": True})
 
+    def _do_karte(self, t0: float) -> None:
+        """v0.7.0: 共通 JSON の入口（①先生が選んだカルテに書く）。合言葉（KARTE_RECEIVER_KEY・ほかと別）→ 長さ → JSON → 確かめ → 列。
+        受け取りの時点の不備は 4xx＋理由（Tukusi の赤丸）。記録は番号・理由だけ（本文・患者番号・URL は入れない）"""
+        expected = os.environ.get("KARTE_RECEIVER_KEY", "")
+        if not expected.strip():
+            self._reject(503, "karte_no_key_configured")
+            return
+        if not key_ok(self.headers.get("Authorization", ""), expected):
+            self._reject(401, "karte_bad_key")
+            return
+        raw_len = self.headers.get("Content-Length")
+        if raw_len is None or not raw_len.strip().isdigit():
+            self._reject(411, "karte_no_length")
+            return
+        length = int(raw_len.strip())
+        if length > MAX_BODY:
+            self._reject(413, "karte_too_large")
+            return
+        raw = self._read_body(length) if length else b""
+        if raw is None:
+            self._drop("karte_read_incomplete")
+            return
+        record = {"event": "karte_receive", "version": VERSION, "body_bytes": len(raw)}
+        try:
+            body = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError) as e:
+            body = None
+            record["json_error"] = type(e).__name__
+        if not isinstance(body, dict):
+            record.update({"json_ok": False, "severity": "WARNING"})
+            log_line(record)
+            self._reply(400, {"ok": False, "error": "bad_json", "message": "JSON の形が違います"})
+            return
+        record["s"] = text_stats(body.get("soap_s"))
+        code, reply, info = enqueue_karte(body)
+        del body, raw   # 本文はここで捨てる
+        record.update(info)
+        record["status"] = code
+        record["elapsed_ms"] = int((time.time() - t0) * 1000)
+        if code != 200:
+            record["severity"] = "WARNING"
+        log_line(record)
+        self._reply(code, reply)
+
     def do_POST(self):  # noqa: N802
         t0 = time.time()
         if self.path.split("?")[0] == "/bot/receive":
             self._do_bot(t0)
+            return
+        if self.path.split("?")[0] == "/karte/receive":
+            self._do_karte(t0)
             return
         if self.path.split("?")[0] != "/fax/receive":
             if self._drain():
