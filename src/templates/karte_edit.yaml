@@ -16,6 +16,8 @@ auth:
   detect_login: true
 
 steps:
+  # 注意: この手順の名前はライター（cloud/server.py の EDIT_BUTTON_STEP）が「開いていないので自動でやり直してよい」の見分けに使う。
+  #       名前を変えるときは両方を直す（test_karte_edit の t0 が赤になる）。この前に stop_on_fail の手順を足すときは、その名前も見分けに足す（黒ヤギ 4回目 指摘2）
   - name: 編集ボタンをクリック
     action: click
     selector: "#karteEdit"

@@ -2,9 +2,11 @@
 """Cloud Run 受け口（フェーズ2a＋失敗ガード）
 
 ==============================================================================
-バージョン: 3.13.0
+バージョン: 3.13.1
 最終更新: 2026/11/06
 改定履歴（新しい順・全体は docs/SPEC_v3_cloud.md 0章「モジュール別の版」）:
+  v3.13.1 11/06 黒ヤギ 3.13.0 実装4回目 指摘1: 編集ボタンが見つからない印（edit_button_missing）をやめ、edit_outcome は「編集ボタンの手順で止まったか」だけで見る
+               （同じことを2か所で持たない・印の戻し忘れで別の手順の失敗をやり直しに回さない）。動きは 3.13.0 と同じ
   v3.13.0 11/06 共通 JSON の入口 ①先生が選んだカルテに書く（型紙 karte_edit・注文番号 KE-・仕様 docs/FAXカルテ_検討/SPEC_共通JSON入口_v0.md v1.0）。
                今の3つの型紙（xray_karte・fax_so・bot_s_interrupt）の書き方（_write_locked）は通らない別の関数 _write_edit_locked で書く。
                札を取ったあと karte_guard で書く前に確かめ（患者・完了・取消・診察日が今日か昨日）、最終更新日時・更新者を控える。
@@ -112,7 +114,6 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
-from selenium.common.exceptions import TimeoutException
 
 import navi_callback
 import patient_lock
@@ -250,7 +251,6 @@ def _reset_opened():
     _TLS.edit_checked = False    # v3.7.0: この回で書きかけの守りを見たか
     _TLS.current_kid = ""        # v3.7.0: この回で開いたカルテの番号（編集画面から）
     _TLS.edit_mode = False       # v3.13.0: karte_edit を書いている間だけ True
-    _TLS.edit_button_missing = False   # v3.13.0: 編集ボタンが見つからなかった（押していない）
 
 
 def _start_order():
@@ -434,12 +434,7 @@ def _click_cloud(self, selector, selector_type="css", text_contains=""):
     if selector == "#karteEdit":
         # v3.13.0: 押す前に「開いた」とする（押している途中で Chrome が落ちても、開いたかもしれない＝やり直さない側・黒ヤギ 3.13.0 実装1回目 指摘3）。
         # ただしボタンが見つからない（読み込みの遅れ等・ここで例外）なら押していない＝開いていないので、見つかってから立てる（実装2回目 指摘1）
-        try:
-            self._find_element(selector, clickable=True, selector_type=selector_type)
-        except TimeoutException:
-            _TLS.edit_button_missing = True   # 押していない＝時間切れとして自動やり直しに回す（edit_outcome）
-            logger.warning("編集ボタンが見つからない（押していない）")
-            raise
+        self._find_element(selector, clickable=True, selector_type=selector_type)   # 見つからなければここで例外（開いていない）
         _TLS.karte_opened = True
     out = _orig_click(self, selector, selector_type, text_contains)
     if selector == "#karteEdit":
@@ -762,8 +757,7 @@ def edit_outcome(result: dict, opened: bool, blocked: str, stopped: str, err: st
             return False, "stopped:unverified_input", "editing"
         # 編集ボタンが押せなかった（何も開いていない）。見つからなかった（読み込みの遅れ等）は時間切れとして自動やり直しに回す（黒ヤギ 2回目 指摘1）
         # 例外の種類に関係なく、編集ボタンの手順で止まり開いていなければ時間切れとしてやり直す（何も開いていない・黒ヤギ 3回目 指摘1）
-        missing = getattr(_TLS, "edit_button_missing", False) or stopped == EDIT_BUTTON_STEP
-        return False, ("timeout" if missing else (err or "step:" + stopped)), "none"
+        return False, ("timeout" if stopped == EDIT_BUTTON_STEP else (err or "step:" + stopped)), "none"
     if not result.get("success"):
         return False, err or ("opened_then_fail" if opened else "unknown"), ("editing" if opened else "none")
     return True, ("" if err == "no_karte_id" else err), "saved"   # カルテ番号は送られてきたもの（リンクが取れなくてもよい）
